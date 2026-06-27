@@ -14,19 +14,67 @@
 #define BTN_CIRCLE   0x02
 #define BTN_SQUARE   0x04
 #define BTN_TRIANGLE 0x08
-#define BTN_START 0x10
+#define BTN_OPTIONS  0x10
 
 #define STALE_MS 250
 #define HID_SEND_INTERVAL_MS 20
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
+// Custom gamepad descriptor:
+// - 16 buttons
+// - left stick: X/Y
+// - right stick: Z/Rz
+// - triggers: Brake/Accelerator analog axes, 0..255
 uint8_t const desc_hid_report[] = {
-  TUD_HID_REPORT_DESC_GAMEPAD()
+  0x05, 0x01,        // Usage Page (Generic Desktop)
+  0x09, 0x05,        // Usage (Game Pad)
+  0xA1, 0x01,        // Collection (Application)
+
+  0x05, 0x09,        // Usage Page (Button)
+  0x19, 0x01,        // Usage Minimum (Button 1)
+  0x29, 0x10,        // Usage Maximum (Button 16)
+  0x15, 0x00,        // Logical Minimum (0)
+  0x25, 0x01,        // Logical Maximum (1)
+  0x75, 0x01,        // Report Size (1)
+  0x95, 0x10,        // Report Count (16)
+  0x81, 0x02,        // Input (Data, Variable, Absolute)
+
+  0x05, 0x01,        // Usage Page (Generic Desktop)
+  0x09, 0x30,        // Usage (X)
+  0x09, 0x31,        // Usage (Y)
+  0x09, 0x32,        // Usage (Z)
+  0x09, 0x35,        // Usage (Rz)
+  0x15, 0x81,        // Logical Minimum (-127)
+  0x25, 0x7F,        // Logical Maximum (127)
+  0x75, 0x08,        // Report Size (8)
+  0x95, 0x04,        // Report Count (4)
+  0x81, 0x02,        // Input (Data, Variable, Absolute)
+
+  0x05, 0x02,        // Usage Page (Simulation Controls)
+  0x09, 0xC5,        // Usage (Brake)
+  0x09, 0xC4,        // Usage (Accelerator)
+  0x15, 0x00,        // Logical Minimum (0)
+  0x26, 0xFF, 0x00,  // Logical Maximum (255)
+  0x75, 0x08,        // Report Size (8)
+  0x95, 0x02,        // Report Count (2)
+  0x81, 0x02,        // Input (Data, Variable, Absolute)
+
+  0xC0               // End Collection
 };
 
+typedef struct __attribute__((packed)) {
+  uint16_t buttons;
+  int8_t x;
+  int8_t y;
+  int8_t z;
+  int8_t rz;
+  uint8_t brake;
+  uint8_t accelerator;
+} lora_gamepad_report_t;
+
 Adafruit_USBD_HID usb_hid;
-hid_gamepad_report_t gp;
+lora_gamepad_report_t gp;
 
 unsigned long lastFrameMs = 0;
 unsigned long lastHidSendMs = 0;
@@ -69,9 +117,9 @@ int8_t stickToHid(int16_t value) {
   return (int8_t)map(value, -1000, 1000, -127, 127);
 }
 
-int8_t triggerToHid(uint16_t value) {
+uint8_t triggerToHid(uint16_t value) {
   value = constrain(value, 0, 1000);
-  return (int8_t)map(value, 0, 1000, -127, 127);
+  return (uint8_t)map(value, 0, 1000, 0, 255);
 }
 
 void resetRadio() {
@@ -97,17 +145,14 @@ void updateGamepadReport() {
   gp.x = stickToHid(latestLx);
   gp.y = stickToHid(latestLy);
 
-  // TinyUSB gamepad template uses z/rz for the second stick.
   gp.z = stickToHid(latestRx);
   gp.rz = stickToHid(latestRy);
 
-  // Use rx/ry for analog triggers.
-  gp.rx = triggerToHid(latestLt);
-  gp.ry = triggerToHid(latestRt);
-
-  gp.hat = 0;
+  gp.brake = triggerToHid(latestLt);
+  gp.accelerator = triggerToHid(latestRt);
 
   gp.buttons = 0;
+
   if (latestButtons & BTN_CROSS) {
     gp.buttons |= (1UL << 0);
   }
@@ -115,17 +160,63 @@ void updateGamepadReport() {
     gp.buttons |= (1UL << 1);
   }
   if (latestButtons & BTN_SQUARE) {
-    gp.buttons |= (1UL << 2);
-  }
-  if (latestButtons & BTN_TRIANGLE) {
     gp.buttons |= (1UL << 3);
   }
-  if (latestButtons & BTN_START) {
-    gp.buttons |= (1UL << 8);
+  if (latestButtons & BTN_TRIANGLE) {
+    gp.buttons |= (1UL << 4);
+  }
+
+  // You found this is the correct Options/Start registration button.
+  if (latestButtons & BTN_OPTIONS) {
+    gp.buttons |= (1UL << 11);
   }
 }
 
+void printReceivedFrame(uint16_t seq, uint8_t buttons, int rssi) {
+  if (!Serial) return;
+
+  Serial.print("seq=");
+  Serial.print(seq);
+
+  Serial.print(" lx=");
+  Serial.print(latestLx);
+  Serial.print(" ly=");
+  Serial.print(latestLy);
+  Serial.print(" rx=");
+  Serial.print(latestRx);
+  Serial.print(" ry=");
+  Serial.print(latestRy);
+  Serial.print(" lt=");
+  Serial.print(latestLt);
+  Serial.print(" rt=");
+  Serial.print(latestRt);
+
+  Serial.print(" brake=");
+  Serial.print(gp.brake);
+  Serial.print(" accelerator=");
+  Serial.print(gp.accelerator);
+
+  Serial.print(" cross=");
+  Serial.print((buttons & BTN_CROSS) ? 1 : 0);
+  Serial.print(" circle=");
+  Serial.print((buttons & BTN_CIRCLE) ? 1 : 0);
+  Serial.print(" square=");
+  Serial.print((buttons & BTN_SQUARE) ? 1 : 0);
+  Serial.print(" triangle=");
+  Serial.print((buttons & BTN_TRIANGLE) ? 1 : 0);
+  Serial.print(" options=");
+  Serial.print((buttons & BTN_OPTIONS) ? 1 : 0);
+
+  Serial.print(" hid_buttons=0x");
+  Serial.print(gp.buttons, HEX);
+  Serial.print(" rssi=");
+  Serial.println(rssi);
+}
+
 void setup() {
+  Serial.begin(115200);
+  delay(100);
+
   pinMode(LED, OUTPUT);
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
@@ -161,7 +252,6 @@ void setup() {
   }
 
   rf95.setTxPower(20, false);
-
   neutralizeControls();
 }
 
@@ -175,6 +265,8 @@ void loop() {
     uint8_t len = sizeof(buf);
 
     if (rf95.recv(buf, &len) && frameIsValid(buf, len)) {
+      uint16_t seq = readU16(buf, 3);
+
       latestLx = readI16(buf, 6);
       latestLy = readI16(buf, 8);
       latestRx = readI16(buf, 10);
@@ -185,6 +277,9 @@ void loop() {
 
       lastFrameMs = millis();
       digitalWrite(LED, HIGH);
+
+      updateGamepadReport();
+      printReceivedFrame(seq, latestButtons, rf95.lastRssi());
     }
   }
 
