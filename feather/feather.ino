@@ -286,6 +286,7 @@ void loop() {
   if (lastFrameMs == 0 || millis() - lastFrameMs > STALE_MS) {
     neutralizeControls();
     digitalWrite(LED, LOW);
+    
   }
 
   if (TinyUSBDevice.mounted() && usb_hid.ready()) {
@@ -294,5 +295,11 @@ void loop() {
       usb_hid.sendReport(0, &gp, sizeof(gp));
       lastHidSendMs = millis();
     }
+  }
+
+  static unsigned long lastDebugMs = 0;
+  if (millis() - lastDebugMs > 1000) {
+    Serial.println("alive, waiting for LoRa frames");
+    lastDebugMs = millis();
   }
 }
