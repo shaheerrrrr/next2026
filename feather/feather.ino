@@ -15,6 +15,8 @@
 #define BTN_SQUARE   0x04
 #define BTN_TRIANGLE 0x08
 #define BTN_OPTIONS  0x10
+#define BTN_L1       0x20
+#define BTN_R1       0x40
 
 #define STALE_MS 250
 #define HID_SEND_INTERVAL_MS 20
@@ -170,6 +172,14 @@ void updateGamepadReport() {
   if (latestButtons & BTN_OPTIONS) {
     gp.buttons |= (1UL << 11);
   }
+
+  // These reuse the HID outputs that showed up as B6/B7 on your phone tester.
+  if (latestButtons & BTN_L1) {
+    gp.buttons |= (1UL << 6);
+  }
+  if (latestButtons & BTN_R1) {
+    gp.buttons |= (1UL << 7);
+  }
 }
 
 void printReceivedFrame(uint16_t seq, uint8_t buttons, int rssi) {
@@ -206,6 +216,10 @@ void printReceivedFrame(uint16_t seq, uint8_t buttons, int rssi) {
   Serial.print((buttons & BTN_TRIANGLE) ? 1 : 0);
   Serial.print(" options=");
   Serial.print((buttons & BTN_OPTIONS) ? 1 : 0);
+  Serial.print(" l1=");
+  Serial.print((buttons & BTN_L1) ? 1 : 0);
+  Serial.print(" r1=");
+  Serial.print((buttons & BTN_R1) ? 1 : 0);
 
   Serial.print(" hid_buttons=0x");
   Serial.print(gp.buttons, HEX);

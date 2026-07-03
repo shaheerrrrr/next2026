@@ -30,6 +30,8 @@ BTN_TRIANGLE = 1 << 3
 # On FTC-style Logitech controllers this is Start + A.
 BTN_A = BTN_CROSS
 BTN_START = 1 << 4
+BTN_L1 = 1 << 5
+BTN_R1 = 1 << 6
 
 EVENT_BACKLOG = 500
 STALE_AFTER_S = 0.35
@@ -268,7 +270,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .buttons {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 10px;
       margin-top: 16px;
     }
@@ -398,6 +400,8 @@ INDEX_HTML = r"""<!doctype html>
             <div class="btn-state" id="circle">Circle / B</div>
             <div class="btn-state" id="square">Square / X</div>
             <div class="btn-state" id="triangle">Triangle / Y</div>
+            <div class="btn-state" id="leftBumper">L1 / LB</div>
+            <div class="btn-state" id="rightBumper">R1 / RB</div>
           </div>
         </div>
       </section>
@@ -454,6 +458,7 @@ INDEX_HTML = r"""<!doctype html>
         `lt=${String(frame.lt).padStart(4, ' ')} rt=${String(frame.rt).padStart(4, ' ')} ` +
         `cross=${frame.cross ? 1 : 0} circle=${frame.circle ? 1 : 0} ` +
         `square=${frame.square ? 1 : 0} triangle=${frame.triangle ? 1 : 0} ` +
+        `l1=${frame.left_bumper ? 1 : 0} r1=${frame.right_bumper ? 1 : 0} ` +
         `serial=${frame.serial_ok ? 'ok' : 'down'} gamepad=${frame.gamepad_ok ? 'ok' : 'down'}`;
       term.appendChild(line);
       while (term.childNodes.length > 2500) term.removeChild(term.firstChild);
@@ -484,6 +489,8 @@ INDEX_HTML = r"""<!doctype html>
       setButton('circle', frame.circle);
       setButton('square', frame.square);
       setButton('triangle', frame.triangle);
+      setButton('leftBumper', frame.left_bumper);
+      setButton('rightBumper', frame.right_bumper);
 
       setPill('gamepadPill', frame.gamepad_ok ? 'ok' : 'bad', frame.gamepad_ok ? 'Gamepad OK' : 'Gamepad Down');
       setPill('serialPill', frame.serial_ok ? 'ok' : 'bad', frame.serial_ok ? 'Serial OK' : 'Serial Down');
@@ -607,7 +614,7 @@ def checksum(payload):
     return c
 
 
-def read_controller_state(joystick):
+def read_controller_state(joystick, l1_button, r1_button):
     pygame.event.pump()
 
     lx = stick_to_i16(apply_deadband(joystick.get_axis(0)))
@@ -626,6 +633,10 @@ def read_controller_state(joystick):
       buttons |= BTN_SQUARE
     if joystick.get_button(3):
       buttons |= BTN_TRIANGLE
+    if l1_button < joystick.get_numbuttons() and joystick.get_button(l1_button):
+      buttons |= BTN_L1
+    if r1_button < joystick.get_numbuttons() and joystick.get_button(r1_button):
+      buttons |= BTN_R1
 
     return {
         "lx": lx,
@@ -670,6 +681,8 @@ def make_frame_payload(seq, state, shared, injected_driver1):
         "circle": bool(buttons & BTN_CIRCLE),
         "square": bool(buttons & BTN_SQUARE),
         "triangle": bool(buttons & BTN_TRIANGLE),
+        "left_bumper": bool(buttons & BTN_L1),
+        "right_bumper": bool(buttons & BTN_R1),
         "injected_driver1": injected_driver1,
         "sent_count": shared.sent_count,
         "serial_ok": shared.serial_ok,
@@ -713,7 +726,7 @@ def run_transmitter(args, shared):
 
     try:
         while True:
-            state = read_controller_state(joystick)
+            state = read_controller_state(joystick, args.l1_button, args.r1_button)
             injected_driver1 = shared.driver1_active()
             if injected_driver1:
                 state["buttons"] |= BTN_START | BTN_A
@@ -819,6 +832,8 @@ def main():
     parser.add_argument("--hz", type=float, default=FRAME_RATE_HZ)
     parser.add_argument("--web-host", default="127.0.0.1")
     parser.add_argument("--web-port", type=int, default=8765)
+    parser.add_argument("--l1-button", type=int, default=9, help="pygame button index for PS4 L1/LB")
+    parser.add_argument("--r1-button", type=int, default=10, help="pygame button index for PS4 R1/RB")
     args = parser.parse_args()
 
     shared = SharedState()
