@@ -1,6 +1,2 @@
-numpy==2.4.4
-openvino==2026.1.0
-openvino-telemetry==2025.2.0
-PyAFF==0.1
-TBB==2023.0.0
-wheel==0.47.0
+pygame==2.6.1
+pyserial==3.5
