@@ -15,8 +15,8 @@ public class Drivetrain {
         leftMotor = hardwareMap.get(DcMotor.class, LEFT_MOTOR_NAME);
         rightMotor = hardwareMap.get(DcMotor.class, RIGHT_MOTOR_NAME);
 
-        leftMotor.setDirection(DcMotorSimple.Direction.FORWARD);
-        rightMotor.setDirection(DcMotorSimple.Direction.REVERSE);
+        leftMotor.setDirection(DcMotorSimple.Direction.REVERSE);
+        rightMotor.setDirection(DcMotorSimple.Direction.FORWARD);
 
         leftMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         rightMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
