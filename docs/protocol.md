@@ -1,10 +1,15 @@
 # Protocol Reference
 
-The current controller frame is 19 bytes.
+There are now two controller protocols in this repository:
+
+- v2 legacy single-robot protocol: used by [gamepad_lora_tx.py](../gamepad_lora_tx.py), [uno/uno.ino](../uno/uno.ino), and [feather/feather.ino](../feather/feather.ino).
+- v3 multi-robot protocol: used by [driver_station_flask.py](../driver_station_flask.py), [driverstation/driverstation.ino](../driverstation/driverstation.ino), and the Flash/Fable/Sol Feather sketches.
 
 Keep Python, Uno, and Feather in sync if this protocol changes.
 
-## Frame Layout
+## v2 Legacy Frame Layout
+
+The legacy single-robot controller frame is 19 bytes.
 
 | Field | Type | Bytes | Notes |
 | --- | --- | ---: | --- |
@@ -27,6 +32,32 @@ PACK_FMT_NO_CHECKSUM = "<2sBHBhhhhHH"
 FRAME_LEN = struct.calcsize(PACK_FMT_NO_CHECKSUM) + 1
 ```
 
+## v3 Multi-Robot Frame Layout
+
+The multi-robot controller frame is 21 bytes.
+
+| Field | Type | Bytes | Notes |
+| --- | --- | ---: | --- |
+| magic | bytes | 2 | Always `0xA5 0x5A` |
+| version | uint8 | 1 | Currently `3` |
+| target_robot | uint8 | 1 | `1` Flash, `2` Fable, `3` Sol, `255` broadcast |
+| seq | uint16 LE | 2 | Sequence number |
+| buttons | uint16 LE | 2 | Protocol button bitmask |
+| lx | int16 LE | 2 | Left stick X, `-1000..1000` |
+| ly | int16 LE | 2 | Left stick Y, `-1000..1000` |
+| rx | int16 LE | 2 | Right stick X, `-1000..1000` |
+| ry | int16 LE | 2 | Right stick Y, `-1000..1000` |
+| lt | uint16 LE | 2 | Left trigger, `0..1000` |
+| rt | uint16 LE | 2 | Right trigger, `0..1000` |
+| checksum | uint8 | 1 | XOR checksum |
+
+Python format before checksum:
+
+```python
+PACK_FMT_NO_CHECKSUM = "<2sBBHHhhhhHH"
+FRAME_LEN = struct.calcsize(PACK_FMT_NO_CHECKSUM) + 1
+```
+
 ## Checksum
 
 The checksum is the XOR of every byte after magic and before checksum:
@@ -37,7 +68,7 @@ checksum(frame_without_checksum[2:])
 
 In other words, the magic bytes are not included in the checksum.
 
-## Button Bitmask
+## v2 Button Bitmask
 
 | Bit | Hex | Meaning |
 | ---: | --- | --- |
@@ -48,6 +79,22 @@ In other words, the magic bytes are not included in the checksum.
 | 4 | `0x10` | Options / Start registration pulse |
 | 5 | `0x20` | L1 / left bumper |
 | 6 | `0x40` | R1 / right bumper |
+
+## v3 Button Bitmask
+
+| Bit | Hex | Meaning |
+| ---: | --- | --- |
+| 0 | `0x0001` | Cross / A |
+| 1 | `0x0002` | Circle / B |
+| 2 | `0x0004` | Square / X |
+| 3 | `0x0008` | Triangle / Y |
+| 4 | `0x0010` | Options / Start registration pulse |
+| 5 | `0x0020` | L1 / left bumper |
+| 6 | `0x0040` | R1 / right bumper |
+| 7 | `0x0080` | D-pad up |
+| 8 | `0x0100` | D-pad down |
+| 9 | `0x0200` | D-pad left |
+| 10 | `0x0400` | D-pad right |
 
 ## Mac Controller Mapping
 
@@ -67,6 +114,7 @@ Current expected DS4 mapping through `pygame`:
 | Triangle | button 3 |
 | L1 | button 9 by default |
 | R1 | button 10 by default |
+| D-pad | hat 0, or buttons 11/12/13/14 by default |
 
 L1/R1 can be changed with:
 
@@ -74,9 +122,15 @@ L1/R1 can be changed with:
 --l1-button 9 --r1-button 10
 ```
 
+D-pad button fallbacks can be changed with:
+
+```bash
+--dpad-up-button 11 --dpad-down-button 12 --dpad-left-button 13 --dpad-right-button 14
+```
+
 Triggers are normalized from the usual DS4 axis range `-1.0..1.0` into `0..1000`.
 
-## Feather HID Mapping
+## Legacy Feather HID Mapping
 
 The Feather exposes a custom TinyUSB gamepad report:
 
@@ -110,3 +164,18 @@ Current HID behavior in [feather/feather.ino](../feather/feather.ino):
 
 The L1/R1 mappings in this document intentionally match the deployed code.
 
+## Multi-Robot Feather Behavior
+
+Each v3 Feather sketch has a fixed robot id:
+
+| Robot | Sketch | Robot id |
+| --- | --- | ---: |
+| Flash | [flash/flash.ino](../flash/flash.ino) | `1` |
+| Fable | [fable/fable.ino](../fable/fable.ino) | `2` |
+| Sol | [sol/sol.ino](../sol/sol.ino) | `3` |
+
+All robots receive every LoRa packet. A robot only applies packets whose `target_robot` matches its own id, or packets addressed to `255`.
+
+When a packet targets another robot, the Feather emits neutral HID reports so the connected Android phone keeps seeing a controller with all controls released.
+
+Flash and Fable preserve the deployed button/axis HID mappings from the original Feather sketch. Sol uses the same stick axes, maps right trigger to Accelerator, maps Square/X to the tested X-button output, and maps the protocol D-pad bits to a HID hat switch.

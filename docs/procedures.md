@@ -39,7 +39,7 @@ The Feather should appear to Android as a USB gamepad.
 
 ## Software Setup
 
-Flash:
+Upload/flash:
 
 - [uno/uno.ino](../uno/uno.ino) to the Arduino Uno.
 - [feather/feather.ino](../feather/feather.ino) to the Feather M0 RFM9x.
@@ -69,6 +69,37 @@ Open the dashboard:
 ```text
 http://127.0.0.1:8765
 ```
+
+## Start the Multi-Robot Flask Driver Station
+
+For Flash/Fable/Sol control, flash:
+
+- [driverstation/driverstation.ino](../driverstation/driverstation.ino) to the driver-side Uno.
+- [flash/flash.ino](../flash/flash.ino) to Flash's Feather.
+- [fable/fable.ino](../fable/fable.ino) to Fable's Feather.
+- [sol/sol.ino](../sol/sol.ino) to Sol's Feather.
+
+Install Python dependencies:
+
+```bash
+cd ~/next2026
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Run:
+
+```bash
+python driver_station_flask.py --port /dev/cu.usbmodem11301 --hz 20
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+Use the top robot selector to choose which robot receives live tele-op HID controls. Press Space in the dashboard to cycle Flash -> Fable -> Sol without clicking.
 
 ## Register the Controller in Driver Station
 
@@ -100,4 +131,3 @@ Use this order when starting from cold hardware:
 Stop the Python transmitter with `Ctrl-C`.
 
 The Feather will neutralize controls automatically if LoRa frames stop arriving.
-

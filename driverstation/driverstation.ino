@@ -6,9 +6,9 @@
 #define RFM95_INT 2
 
 #define RF95_FREQ 915.0
-
-#define FRAME_LEN 19
+#define FRAME_LEN 21
 #define SERIAL_BAUD 115200
+#define PROTOCOL_VERSION 3
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
@@ -26,6 +26,7 @@ uint8_t xorChecksum(const uint8_t *data, uint8_t len) {
 
 bool frameIsValid(const uint8_t *buf) {
   if (buf[0] != 0xA5 || buf[1] != 0x5A) return false;
+  if (buf[2] != PROTOCOL_VERSION) return false;
   uint8_t expected = xorChecksum(buf + 2, FRAME_LEN - 3);
   return expected == buf[FRAME_LEN - 1];
 }
@@ -95,3 +96,4 @@ void loop() {
     }
   }
 }
+

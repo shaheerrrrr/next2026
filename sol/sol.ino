@@ -2,67 +2,82 @@
 #include <RH_RF95.h>
 #include "Adafruit_TinyUSB.h"
 
+#define ROBOT_ID 3
+#define ROBOT_NAME "Sol"
+#define ROBOT_ALL 255
+
 #define RFM95_CS 8
 #define RFM95_RST 4
 #define RFM95_INT 3
 
 #define RF95_FREQ 915.0
-#define FRAME_LEN 19
+#define FRAME_LEN 21
+#define PROTOCOL_VERSION 3
 #define LED 13
 
-#define BTN_CROSS    0x01
-#define BTN_CIRCLE   0x02
-#define BTN_SQUARE   0x04
-#define BTN_TRIANGLE 0x08
-#define BTN_OPTIONS  0x10
-#define BTN_L1       0x20
-#define BTN_R1       0x40
+#define BTN_CROSS      0x0001
+#define BTN_SQUARE     0x0004
+#define BTN_OPTIONS    0x0010
+#define BTN_DPAD_UP    0x0080
+#define BTN_DPAD_DOWN  0x0100
+#define BTN_DPAD_LEFT  0x0200
+#define BTN_DPAD_RIGHT 0x0400
 
 #define STALE_MS 250
 #define HID_SEND_INTERVAL_MS 20
+#define HAT_NEUTRAL 8
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-// Custom gamepad descriptor:
-// - 16 buttons
-// - left stick: X/Y
-// - right stick: Z/Rz
-// - triggers: Brake/Accelerator analog axes, 0..255
 uint8_t const desc_hid_report[] = {
-  0x05, 0x01,        // Usage Page (Generic Desktop)
-  0x09, 0x05,        // Usage (Game Pad)
-  0xA1, 0x01,        // Collection (Application)
+  0x05, 0x01,
+  0x09, 0x05,
+  0xA1, 0x01,
 
-  0x05, 0x09,        // Usage Page (Button)
-  0x19, 0x01,        // Usage Minimum (Button 1)
-  0x29, 0x10,        // Usage Maximum (Button 16)
-  0x15, 0x00,        // Logical Minimum (0)
-  0x25, 0x01,        // Logical Maximum (1)
-  0x75, 0x01,        // Report Size (1)
-  0x95, 0x10,        // Report Count (16)
-  0x81, 0x02,        // Input (Data, Variable, Absolute)
+  0x05, 0x09,
+  0x19, 0x01,
+  0x29, 0x10,
+  0x15, 0x00,
+  0x25, 0x01,
+  0x75, 0x01,
+  0x95, 0x10,
+  0x81, 0x02,
 
-  0x05, 0x01,        // Usage Page (Generic Desktop)
-  0x09, 0x30,        // Usage (X)
-  0x09, 0x31,        // Usage (Y)
-  0x09, 0x32,        // Usage (Z)
-  0x09, 0x35,        // Usage (Rz)
-  0x15, 0x81,        // Logical Minimum (-127)
-  0x25, 0x7F,        // Logical Maximum (127)
-  0x75, 0x08,        // Report Size (8)
-  0x95, 0x04,        // Report Count (4)
-  0x81, 0x02,        // Input (Data, Variable, Absolute)
+  0x05, 0x01,
+  0x09, 0x30,
+  0x09, 0x31,
+  0x09, 0x32,
+  0x09, 0x35,
+  0x15, 0x81,
+  0x25, 0x7F,
+  0x75, 0x08,
+  0x95, 0x04,
+  0x81, 0x02,
 
-  0x05, 0x02,        // Usage Page (Simulation Controls)
-  0x09, 0xC5,        // Usage (Brake)
-  0x09, 0xC4,        // Usage (Accelerator)
-  0x15, 0x00,        // Logical Minimum (0)
-  0x26, 0xFF, 0x00,  // Logical Maximum (255)
-  0x75, 0x08,        // Report Size (8)
-  0x95, 0x02,        // Report Count (2)
-  0x81, 0x02,        // Input (Data, Variable, Absolute)
+  0x05, 0x02,
+  0x09, 0xC5,
+  0x09, 0xC4,
+  0x15, 0x00,
+  0x26, 0xFF, 0x00,
+  0x75, 0x08,
+  0x95, 0x02,
+  0x81, 0x02,
 
-  0xC0               // End Collection
+  0x05, 0x01,
+  0x09, 0x39,
+  0x15, 0x00,
+  0x25, 0x07,
+  0x35, 0x00,
+  0x46, 0x3B, 0x01,
+  0x65, 0x14,
+  0x75, 0x04,
+  0x95, 0x01,
+  0x81, 0x42,
+  0x75, 0x04,
+  0x95, 0x01,
+  0x81, 0x03,
+
+  0xC0
 };
 
 typedef struct __attribute__((packed)) {
@@ -73,6 +88,7 @@ typedef struct __attribute__((packed)) {
   int8_t rz;
   uint8_t brake;
   uint8_t accelerator;
+  uint8_t hat;
 } lora_gamepad_report_t;
 
 Adafruit_USBD_HID usb_hid;
@@ -85,9 +101,8 @@ int16_t latestLx = 0;
 int16_t latestLy = 0;
 int16_t latestRx = 0;
 int16_t latestRy = 0;
-uint16_t latestLt = 0;
 uint16_t latestRt = 0;
-uint8_t latestButtons = 0;
+uint16_t latestButtons = 0;
 
 uint8_t xorChecksum(const uint8_t *data, uint8_t len) {
   uint8_t c = 0;
@@ -100,10 +115,15 @@ uint8_t xorChecksum(const uint8_t *data, uint8_t len) {
 bool frameIsValid(const uint8_t *buf, uint8_t len) {
   if (len != FRAME_LEN) return false;
   if (buf[0] != 0xA5 || buf[1] != 0x5A) return false;
-  if (buf[2] != 2) return false;
+  if (buf[2] != PROTOCOL_VERSION) return false;
 
   uint8_t expected = xorChecksum(buf + 2, FRAME_LEN - 3);
   return expected == buf[FRAME_LEN - 1];
+}
+
+bool frameIsForThisRobot(const uint8_t *buf) {
+  uint8_t targetRobot = buf[3];
+  return targetRobot == ROBOT_ID || targetRobot == ROBOT_ALL;
 }
 
 uint16_t readU16(const uint8_t *buf, uint8_t offset) {
@@ -124,6 +144,23 @@ uint8_t triggerToHid(uint16_t value) {
   return (uint8_t)map(value, 0, 1000, 0, 255);
 }
 
+uint8_t dpadToHat(uint16_t buttons) {
+  bool up = buttons & BTN_DPAD_UP;
+  bool down = buttons & BTN_DPAD_DOWN;
+  bool left = buttons & BTN_DPAD_LEFT;
+  bool right = buttons & BTN_DPAD_RIGHT;
+
+  if (up && right) return 1;
+  if (right && down) return 3;
+  if (down && left) return 5;
+  if (left && up) return 7;
+  if (up) return 0;
+  if (right) return 2;
+  if (down) return 4;
+  if (left) return 6;
+  return HAT_NEUTRAL;
+}
+
 void resetRadio() {
   digitalWrite(RFM95_RST, LOW);
   delay(10);
@@ -136,7 +173,6 @@ void neutralizeControls() {
   latestLy = 0;
   latestRx = 0;
   latestRy = 0;
-  latestLt = 0;
   latestRt = 0;
   latestButtons = 0;
 }
@@ -146,48 +182,29 @@ void updateGamepadReport() {
 
   gp.x = stickToHid(latestLx);
   gp.y = stickToHid(latestLy);
-
   gp.z = stickToHid(latestRx);
   gp.rz = stickToHid(latestRy);
-
-  gp.brake = triggerToHid(latestLt);
+  gp.brake = 0;
   gp.accelerator = triggerToHid(latestRt);
-
-  gp.buttons = 0;
+  gp.hat = dpadToHat(latestButtons);
 
   if (latestButtons & BTN_CROSS) {
     gp.buttons |= (1UL << 0);
   }
-  if (latestButtons & BTN_CIRCLE) {
-    gp.buttons |= (1UL << 1);
-  }
   if (latestButtons & BTN_SQUARE) {
     gp.buttons |= (1UL << 3);
   }
-  if (latestButtons & BTN_TRIANGLE) {
-    gp.buttons |= (1UL << 4);
-  }
-
-  // You found this is the correct Options/Start registration button.
   if (latestButtons & BTN_OPTIONS) {
     gp.buttons |= (1UL << 11);
   }
-
-  // These reuse the HID outputs that showed up as B6/B7 on your phone tester.
-  if (latestButtons & BTN_L1) {
-    gp.buttons |= (1UL << 6);
-  }
-  if (latestButtons & BTN_R1) {
-    gp.buttons |= (1UL << 7);
-  }
 }
 
-void printReceivedFrame(uint16_t seq, uint8_t buttons, int rssi) {
+void printReceivedFrame(uint16_t seq, uint16_t buttons, int rssi) {
   if (!Serial) return;
 
-  Serial.print("seq=");
+  Serial.print(ROBOT_NAME);
+  Serial.print(" seq=");
   Serial.print(seq);
-
   Serial.print(" lx=");
   Serial.print(latestLx);
   Serial.print(" ly=");
@@ -196,31 +213,12 @@ void printReceivedFrame(uint16_t seq, uint8_t buttons, int rssi) {
   Serial.print(latestRx);
   Serial.print(" ry=");
   Serial.print(latestRy);
-  Serial.print(" lt=");
-  Serial.print(latestLt);
   Serial.print(" rt=");
   Serial.print(latestRt);
-
-  Serial.print(" brake=");
-  Serial.print(gp.brake);
-  Serial.print(" accelerator=");
-  Serial.print(gp.accelerator);
-
-  Serial.print(" cross=");
-  Serial.print((buttons & BTN_CROSS) ? 1 : 0);
-  Serial.print(" circle=");
-  Serial.print((buttons & BTN_CIRCLE) ? 1 : 0);
-  Serial.print(" square=");
-  Serial.print((buttons & BTN_SQUARE) ? 1 : 0);
-  Serial.print(" triangle=");
-  Serial.print((buttons & BTN_TRIANGLE) ? 1 : 0);
-  Serial.print(" options=");
-  Serial.print((buttons & BTN_OPTIONS) ? 1 : 0);
-  Serial.print(" l1=");
-  Serial.print((buttons & BTN_L1) ? 1 : 0);
-  Serial.print(" r1=");
-  Serial.print((buttons & BTN_R1) ? 1 : 0);
-
+  Serial.print(" buttons=0x");
+  Serial.print(buttons, HEX);
+  Serial.print(" hat=");
+  Serial.print(gp.hat);
   Serial.print(" hid_buttons=0x");
   Serial.print(gp.buttons, HEX);
   Serial.print(" rssi=");
@@ -279,28 +277,32 @@ void loop() {
     uint8_t len = sizeof(buf);
 
     if (rf95.recv(buf, &len) && frameIsValid(buf, len)) {
-      uint16_t seq = readU16(buf, 3);
+      if (frameIsForThisRobot(buf)) {
+        uint16_t seq = readU16(buf, 4);
 
-      latestLx = readI16(buf, 6);
-      latestLy = readI16(buf, 8);
-      latestRx = readI16(buf, 10);
-      latestRy = readI16(buf, 12);
-      latestLt = readU16(buf, 14);
-      latestRt = readU16(buf, 16);
-      latestButtons = buf[5];
+        latestButtons = readU16(buf, 6);
+        latestLx = readI16(buf, 8);
+        latestLy = readI16(buf, 10);
+        latestRx = readI16(buf, 12);
+        latestRy = readI16(buf, 14);
+        latestRt = readU16(buf, 18);
 
-      lastFrameMs = millis();
-      digitalWrite(LED, HIGH);
+        lastFrameMs = millis();
+        digitalWrite(LED, HIGH);
 
-      updateGamepadReport();
-      printReceivedFrame(seq, latestButtons, rf95.lastRssi());
+        updateGamepadReport();
+        printReceivedFrame(seq, latestButtons, rf95.lastRssi());
+      } else {
+        neutralizeControls();
+        lastFrameMs = 0;
+        digitalWrite(LED, LOW);
+      }
     }
   }
 
   if (lastFrameMs == 0 || millis() - lastFrameMs > STALE_MS) {
     neutralizeControls();
     digitalWrite(LED, LOW);
-    
   }
 
   if (TinyUSBDevice.mounted() && usb_hid.ready()) {
@@ -310,10 +312,5 @@ void loop() {
       lastHidSendMs = millis();
     }
   }
-
-  static unsigned long lastDebugMs = 0;
-  if (millis() - lastDebugMs > 1000) {
-    Serial.println("alive, waiting for LoRa frames");
-    lastDebugMs = millis();
-  }
 }
+
