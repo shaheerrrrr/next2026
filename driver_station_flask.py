@@ -21,26 +21,32 @@ ROBOT_FABLE = 2
 ROBOT_SOL = 3
 ROBOT_ALL = 255
 
+ROBOT_ACCENTS = {
+    "flash": "#5692cc",
+    "fable": "#c15f3c",
+    "sol": "#74aa9c",
+}
+
 ROBOTS = {
     "flash": {
         "id": ROBOT_FLASH,
         "name": "Flash",
         "role": "Tele-op drive, intake, dump",
-        "accent": "#52d273",
+        "accent": ROBOT_ACCENTS["flash"],
         "profile": "standard",
     },
     "fable": {
         "id": ROBOT_FABLE,
         "name": "Fable",
         "role": "Tele-op now, GPS autonomy later",
-        "accent": "#5aa9ff",
+        "accent": ROBOT_ACCENTS["fable"],
         "profile": "standard",
     },
     "sol": {
         "id": ROBOT_SOL,
         "name": "Sol",
         "role": "Turret/shooter controls",
-        "accent": "#ffb84d",
+        "accent": ROBOT_ACCENTS["sol"],
         "profile": "sol",
     },
 }
@@ -85,7 +91,7 @@ INDEX_HTML = r"""<!doctype html>
       --border: #2d3943;
       --text: #eef5f8;
       --muted: #9baab4;
-      --accent: #52d273;
+      --accent: __ROBOT_ACCENT_FLASH__;
       --accent-soft: rgba(82, 210, 115, 0.16);
       --warn: #ffcc66;
       --bad: #ff6b6b;
@@ -569,9 +575,9 @@ INDEX_HTML = r"""<!doctype html>
 
   <script>
     const ROBOTS = {
-      flash: { id: 1, name: 'Flash', accent: '#52d273', profile: 'standard' },
-      fable: { id: 2, name: 'Fable', accent: '#5aa9ff', profile: 'standard' },
-      sol: { id: 3, name: 'Sol', accent: '#ffb84d', profile: 'sol' }
+      flash: { id: 1, name: 'Flash', accent: '__ROBOT_ACCENT_FLASH__', profile: 'standard' },
+      fable: { id: 2, name: 'Fable', accent: '__ROBOT_ACCENT_FABLE__', profile: 'standard' },
+      sol: { id: 3, name: 'Sol', accent: '__ROBOT_ACCENT_SOL__', profile: 'sol' }
     };
     const order = ['flash', 'fable', 'sol'];
     const logs = { flash: [], fable: [], sol: [] };
@@ -786,6 +792,21 @@ INDEX_HTML = r"""<!doctype html>
 </body>
 </html>
 """
+
+
+def apply_robot_accents(html):
+    replacements = {
+        "__ROBOT_ACCENT_FLASH__": ROBOT_ACCENTS["flash"],
+        "__ROBOT_ACCENT_FABLE__": ROBOT_ACCENTS["fable"],
+        "__ROBOT_ACCENT_SOL__": ROBOT_ACCENTS["sol"],
+    }
+
+    for token, value in replacements.items():
+        html = html.replace(token, value)
+    return html
+
+
+INDEX_HTML = apply_robot_accents(INDEX_HTML)
 
 
 class SharedState:
