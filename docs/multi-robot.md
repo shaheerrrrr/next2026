@@ -52,6 +52,8 @@ Press Space in the dashboard to cycle control in order:
 Flash -> Fable -> Sol -> Flash
 ```
 
+Fable also has an optional GPS navigation side channel. See [Fable Navigation Link](fable-navigation.md) for the ESP32-C3 GPS/I2C/ESP-NOW firmware and dashboard map behavior.
+
 ## Controls
 
 Flash and Fable use the same HID mappings as the deployed single-robot Feather code:

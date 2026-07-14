@@ -53,6 +53,9 @@ ROBOTS = {
 
 ROBOT_BY_ID = {robot["id"]: key for key, robot in ROBOTS.items()}
 
+FABLE_NAV_SERIAL_BAUD = 115200
+FABLE_NAV_DEFAULT_FIELD_METERS = 12.0
+
 # Packet v3:
 # magic[2], version u8, target_robot u8, seq u16, buttons u16,
 # lx i16, ly i16, rx i16, ry i16, lt u16, rt u16, checksum u8
@@ -215,6 +218,20 @@ INDEX_HTML = r"""<!doctype html>
 
     .robot-tab.active {
       color: #06100a;
+    }
+
+    .robot-tab.auto::after {
+      content: "AUTO";
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      background: #ffcc66;
+      color: #15100a;
+      font-size: 10px;
+      font-weight: 840;
+      letter-spacing: 0.04em;
     }
 
     .tab-name {
@@ -458,6 +475,229 @@ INDEX_HTML = r"""<!doctype html>
 
     .hidden { display: none; }
 
+    .nav-panel {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--panel-2);
+    }
+
+    .nav-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-mode {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .nav-mode.auto {
+      color: #15100a;
+      background: #ffcc66;
+      border-color: #ffcc66;
+    }
+
+    .field-map {
+      position: relative;
+      height: 300px;
+      margin: 12px;
+      border: 1px solid #394650;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: crosshair;
+      background:
+        linear-gradient(to right, rgba(255,255,255,0.055) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.055) 1px, transparent 1px),
+        radial-gradient(circle at center, rgba(193,95,60,0.12), transparent 48%),
+        #10161b;
+      background-size: 12.5% 12.5%, 12.5% 12.5%, auto, auto;
+    }
+
+    .field-map.calibrated {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 24px rgba(193,95,60,0.14);
+    }
+
+    .field-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+      pointer-events: none;
+    }
+
+    .field-line {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .field-line rect {
+      transition: opacity 160ms ease, stroke 160ms ease;
+    }
+
+    .field-dot {
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      border: 2px solid rgba(255,255,255,0.92);
+      box-shadow: 0 0 18px rgba(0,0,0,0.5);
+      display: none;
+    }
+
+    .field-dot.current {
+      background: var(--accent);
+    }
+
+    .field-dot.target {
+      background: #ffcc66;
+    }
+
+    .nav-details {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 0 12px 12px;
+    }
+
+    .nav-detail {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #151b20;
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .nav-detail .value {
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .nav-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 0 12px 12px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(3, 6, 8, 0.72);
+      backdrop-filter: blur(8px);
+    }
+
+    .modal-backdrop.hidden {
+      display: none;
+    }
+
+    .modal {
+      width: min(760px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #151a1f;
+      box-shadow: 0 24px 70px rgba(0,0,0,0.48);
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-body {
+      padding: 16px;
+    }
+
+    .corner-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .corner-row {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .corner-name {
+      color: var(--text);
+      font-weight: 780;
+      padding-bottom: 9px;
+    }
+
+    .field-input label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .field-input input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #10161b;
+      color: var(--text);
+      padding: 9px 10px;
+      font: inherit;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .modal-actions .right {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     @media (max-width: 980px) {
       header { flex-direction: column; }
       .status-row { justify-content: flex-start; }
@@ -486,6 +726,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="status-row">
         <div class="pill" id="gamepadPill"><span class="dot"></span><span>Gamepad</span></div>
         <div class="pill" id="serialPill"><span class="dot"></span><span>Serial</span></div>
+        <div class="pill" id="fableNavPill"><span class="dot"></span><span>Fable Nav</span></div>
         <div class="pill" id="streamPill"><span class="dot"></span><span>Dashboard</span></div>
       </div>
     </header>
@@ -555,6 +796,38 @@ INDEX_HTML = r"""<!doctype html>
               </div>
             </div>
           </div>
+
+          <div id="fableNavPanel" class="nav-panel hidden">
+            <div class="nav-head">
+              <div>
+                <h2>Fable Navigation</h2>
+                <div class="label" id="fableNavSubtitle">Waiting for GPS telemetry...</div>
+              </div>
+              <div class="actions">
+                <button class="action" id="fableCalibrateBtn">Calibrate Field</button>
+                <div class="nav-mode" id="fableNavMode">TELE-OP</div>
+              </div>
+            </div>
+            <div class="field-map" id="fableField">
+              <svg class="field-line" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <rect id="fableFieldOutline" x="5" y="5" width="90" height="90" fill="none" stroke="#c15f3c" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.28"/>
+                <line id="fableTargetLine" x1="50" y1="50" x2="50" y2="50" stroke="#ffcc66" stroke-width="0.8" stroke-dasharray="2 2" opacity="0"/>
+              </svg>
+              <div class="field-empty" id="fableFieldEmpty">GPS fix required for fallback mode. Calibrate field corners to use the rectangle without a current fix.</div>
+              <div class="field-dot current" id="fableCurrentDot" title="Current position"></div>
+              <div class="field-dot target" id="fableTargetDot" title="Selected target"></div>
+            </div>
+            <div class="nav-details">
+              <div class="nav-detail"><div class="label">Current Position</div><div class="value" id="fableCurrentCoord">--</div></div>
+              <div class="nav-detail"><div class="label">Selected Target</div><div class="value" id="fableTargetCoord">Click the field</div></div>
+              <div class="nav-detail"><div class="label">GPS Quality</div><div class="value" id="fableGpsQuality">--</div></div>
+              <div class="nav-detail"><div class="label">ESP-NOW Link</div><div class="value" id="fableLinkState">--</div></div>
+            </div>
+            <div class="nav-actions">
+              <button class="action primary" id="fableSendTargetBtn" disabled>Send Target</button>
+              <button class="action" id="fableCancelAutoBtn">Cancel Auto</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -573,6 +846,53 @@ INDEX_HTML = r"""<!doctype html>
     </main>
   </div>
 
+  <div class="modal-backdrop hidden" id="fableCalibrationModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h2>Calibrate Fable Field</h2>
+          <div class="label">Enter GPS coordinates for each corner. The map will use these as the field rectangle.</div>
+        </div>
+        <button class="action" id="fableCalCloseBtn">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="corner-grid">
+          <div class="corner-row" data-corner="nw">
+            <div class="corner-name">Northwest</div>
+            <div class="field-input"><label>Latitude</label><input id="calNwLat" inputmode="decimal" placeholder="37.4219999"></div>
+            <div class="field-input"><label>Longitude</label><input id="calNwLon" inputmode="decimal" placeholder="-122.0840575"></div>
+            <button class="action use-current" data-corner="nw">Use Current</button>
+          </div>
+          <div class="corner-row" data-corner="ne">
+            <div class="corner-name">Northeast</div>
+            <div class="field-input"><label>Latitude</label><input id="calNeLat" inputmode="decimal"></div>
+            <div class="field-input"><label>Longitude</label><input id="calNeLon" inputmode="decimal"></div>
+            <button class="action use-current" data-corner="ne">Use Current</button>
+          </div>
+          <div class="corner-row" data-corner="se">
+            <div class="corner-name">Southeast</div>
+            <div class="field-input"><label>Latitude</label><input id="calSeLat" inputmode="decimal"></div>
+            <div class="field-input"><label>Longitude</label><input id="calSeLon" inputmode="decimal"></div>
+            <button class="action use-current" data-corner="se">Use Current</button>
+          </div>
+          <div class="corner-row" data-corner="sw">
+            <div class="corner-name">Southwest</div>
+            <div class="field-input"><label>Latitude</label><input id="calSwLat" inputmode="decimal"></div>
+            <div class="field-input"><label>Longitude</label><input id="calSwLon" inputmode="decimal"></div>
+            <button class="action use-current" data-corner="sw">Use Current</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="action" id="fableCalClearBtn">Clear Calibration</button>
+        <div class="right">
+          <button class="action" id="fableCalCancelBtn">Cancel</button>
+          <button class="action primary" id="fableCalSaveBtn">Save Field</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const ROBOTS = {
       flash: { id: 1, name: 'Flash', accent: '__ROBOT_ACCENT_FLASH__', profile: 'standard' },
@@ -583,9 +903,33 @@ INDEX_HTML = r"""<!doctype html>
     const logs = { flash: [], fable: [], sol: [] };
     const latestByRobot = {};
     const el = id => document.getElementById(id);
+    const FABLE_FIELD_METERS = __FABLE_FIELD_METERS__;
     let activeRobot = 'flash';
     let paused = false;
     let lastEventAt = 0;
+    let fableNav = {};
+    let fableFieldCenter = null;
+    let fableSelectedTarget = null;
+    let fableFieldCalibration = null;
+
+    function loadFableFieldCalibration() {
+      try {
+        const raw = localStorage.getItem('fableFieldCalibration');
+        fableFieldCalibration = raw ? JSON.parse(raw) : null;
+      } catch {
+        fableFieldCalibration = null;
+      }
+    }
+
+    function saveFableFieldCalibration(calibration) {
+      fableFieldCalibration = calibration;
+      if (calibration) {
+        localStorage.setItem('fableFieldCalibration', JSON.stringify(calibration));
+      } else {
+        localStorage.removeItem('fableFieldCalibration');
+      }
+      updateFableNav(fableNav);
+    }
 
     function setAccent(robotKey) {
       document.documentElement.style.setProperty('--accent', ROBOTS[robotKey].accent);
@@ -627,8 +971,10 @@ INDEX_HTML = r"""<!doctype html>
       el('logTitle').textContent = `${ROBOTS[robotKey].name} Transmit Log`;
 
       const sol = ROBOTS[robotKey].profile === 'sol';
+      const fable = robotKey === 'fable';
       el('standardButtons').classList.toggle('hidden', sol);
       el('solControls').classList.toggle('hidden', !sol);
+      el('fableNavPanel').classList.toggle('hidden', !fable);
       el('ltRow').classList.toggle('hidden', sol);
 
       renderLog();
@@ -637,6 +983,237 @@ INDEX_HTML = r"""<!doctype html>
       if (!fromServer) {
         fetch(`/api/robot/${robotKey}`, { method: 'POST' }).catch(() => {});
       }
+    }
+
+    function formatCoord(lat, lon) {
+      if (lat === null || lon === null || lat === undefined || lon === undefined) return '--';
+      return `${Number(lat).toFixed(7)}, ${Number(lon).toFixed(7)}`;
+    }
+
+    function fableLatLonToPoint(lat, lon) {
+      if (fableFieldCalibration) {
+        return calibratedLatLonToPoint(lat, lon);
+      }
+      if (!fableFieldCenter || lat === null || lon === null || lat === undefined || lon === undefined) return null;
+      const metersPerDegLat = 111320;
+      const metersPerDegLon = 111320 * Math.cos(fableFieldCenter.lat * Math.PI / 180);
+      const dx = (lon - fableFieldCenter.lon) * metersPerDegLon;
+      const dy = (lat - fableFieldCenter.lat) * metersPerDegLat;
+      return {
+        x: 50 + (dx / FABLE_FIELD_METERS) * 100,
+        y: 50 - (dy / FABLE_FIELD_METERS) * 100
+      };
+    }
+
+    function fablePointToLatLon(xPercent, yPercent) {
+      if (fableFieldCalibration) {
+        return calibratedPointToLatLon(xPercent, yPercent);
+      }
+      if (!fableFieldCenter) return null;
+      const metersPerDegLat = 111320;
+      const metersPerDegLon = 111320 * Math.cos(fableFieldCenter.lat * Math.PI / 180);
+      const dx = ((xPercent - 50) / 100) * FABLE_FIELD_METERS;
+      const dy = ((50 - yPercent) / 100) * FABLE_FIELD_METERS;
+      return {
+        lat: fableFieldCenter.lat + dy / metersPerDegLat,
+        lon: fableFieldCenter.lon + dx / metersPerDegLon
+      };
+    }
+
+    function metersPerDegLonAt(lat) {
+      return 111320 * Math.cos(lat * Math.PI / 180);
+    }
+
+    function latLonToMeters(point, originLat, originLon) {
+      return {
+        x: (point.lon - originLon) * metersPerDegLonAt(originLat),
+        y: (point.lat - originLat) * 111320
+      };
+    }
+
+    function metersToLatLon(point, originLat, originLon) {
+      return {
+        lat: originLat + point.y / 111320,
+        lon: originLon + point.x / metersPerDegLonAt(originLat)
+      };
+    }
+
+    function calibratedBasis() {
+      if (!fableFieldCalibration) return null;
+      const nw = fableFieldCalibration.nw;
+      const ne = fableFieldCalibration.ne;
+      const se = fableFieldCalibration.se;
+      const sw = fableFieldCalibration.sw;
+      return {
+        origin: nw,
+        p00: { x: 0, y: 0 },
+        p10: latLonToMeters(ne, nw.lat, nw.lon),
+        p11: latLonToMeters(se, nw.lat, nw.lon),
+        p01: latLonToMeters(sw, nw.lat, nw.lon)
+      };
+    }
+
+    function bilinearMeters(basis, a, b) {
+      const w00 = (1 - a) * (1 - b);
+      const w10 = a * (1 - b);
+      const w11 = a * b;
+      const w01 = (1 - a) * b;
+      return {
+        x: basis.p00.x * w00 + basis.p10.x * w10 + basis.p11.x * w11 + basis.p01.x * w01,
+        y: basis.p00.y * w00 + basis.p10.y * w10 + basis.p11.y * w11 + basis.p01.y * w01
+      };
+    }
+
+    function calibratedLatLonToPoint(lat, lon) {
+      if (lat === null || lon === null || lat === undefined || lon === undefined) return null;
+      const basis = calibratedBasis();
+      if (!basis) return null;
+      const p = latLonToMeters({ lat, lon }, basis.origin.lat, basis.origin.lon);
+      const det = basis.p10.x * basis.p01.y - basis.p10.y * basis.p01.x;
+      if (Math.abs(det) < 0.001) return null;
+      let a = (p.x * basis.p01.y - p.y * basis.p01.x) / det;
+      let b = (basis.p10.x * p.y - basis.p10.y * p.x) / det;
+
+      for (let i = 0; i < 6; i++) {
+        const q = bilinearMeters(basis, a, b);
+        const fx = q.x - p.x;
+        const fy = q.y - p.y;
+        const da = {
+          x: (1 - b) * (basis.p10.x - basis.p00.x) + b * (basis.p11.x - basis.p01.x),
+          y: (1 - b) * (basis.p10.y - basis.p00.y) + b * (basis.p11.y - basis.p01.y)
+        };
+        const db = {
+          x: (1 - a) * (basis.p01.x - basis.p00.x) + a * (basis.p11.x - basis.p10.x),
+          y: (1 - a) * (basis.p01.y - basis.p00.y) + a * (basis.p11.y - basis.p10.y)
+        };
+        const jDet = da.x * db.y - da.y * db.x;
+        if (Math.abs(jDet) < 0.001) break;
+        const stepA = (fx * db.y - fy * db.x) / jDet;
+        const stepB = (da.x * fy - da.y * fx) / jDet;
+        a -= stepA;
+        b -= stepB;
+      }
+
+      return { x: a * 100, y: b * 100 };
+    }
+
+    function calibratedPointToLatLon(xPercent, yPercent) {
+      const basis = calibratedBasis();
+      if (!basis) return null;
+      const a = xPercent / 100;
+      const b = yPercent / 100;
+      const p = bilinearMeters(basis, a, b);
+      return metersToLatLon(p, basis.origin.lat, basis.origin.lon);
+    }
+
+    function placeDot(id, point) {
+      const dot = el(id);
+      if (!point) {
+        dot.style.display = 'none';
+        return;
+      }
+      dot.style.display = 'block';
+      dot.style.left = `${Math.max(0, Math.min(100, point.x))}%`;
+      dot.style.top = `${Math.max(0, Math.min(100, point.y))}%`;
+      dot.style.opacity = point.x < 0 || point.x > 100 || point.y < 0 || point.y > 100 ? 0.45 : 1;
+    }
+
+    function setTargetLine(currentPoint, targetPoint) {
+      const line = el('fableTargetLine');
+      if (!currentPoint || !targetPoint) {
+        line.setAttribute('opacity', '0');
+        return;
+      }
+      line.setAttribute('x1', Math.max(0, Math.min(100, currentPoint.x)));
+      line.setAttribute('y1', Math.max(0, Math.min(100, currentPoint.y)));
+      line.setAttribute('x2', Math.max(0, Math.min(100, targetPoint.x)));
+      line.setAttribute('y2', Math.max(0, Math.min(100, targetPoint.y)));
+      line.setAttribute('opacity', '1');
+    }
+
+    function updateFableNav(nav) {
+      fableNav = Object.assign({}, fableNav, nav || {});
+      const hasCurrent = Boolean(fableNav.gps_valid && fableNav.lat !== null && fableNav.lon !== null);
+
+      if (hasCurrent && !fableFieldCenter) {
+        fableFieldCenter = { lat: fableNav.lat, lon: fableNav.lon };
+      }
+
+      const auto = fableNav.mode === 'autonomous';
+      document.querySelector('[data-robot="fable"]').classList.toggle('auto', auto);
+      el('fableNavMode').textContent = auto ? 'AUTONOMOUS' : 'TELE-OP';
+      el('fableNavMode').classList.toggle('auto', auto);
+      setPill('fableNavPill', fableNav.serial_ok ? (auto ? 'warn' : 'ok') : 'bad', fableNav.serial_ok ? (auto ? 'Fable Auto' : 'Fable Nav OK') : 'Fable Nav Down');
+
+      const fixLabel = fableNav.fix_quality === 2 ? 'good' : (fableNav.fix_quality === 1 ? 'weak' : 'none');
+      const calibrated = Boolean(fableFieldCalibration);
+      el('fableField').classList.toggle('calibrated', calibrated);
+      el('fableFieldOutline').setAttribute('opacity', calibrated ? '1' : '0.28');
+      el('fableFieldOutline').setAttribute('stroke-dasharray', calibrated ? '0' : '2 2');
+      el('fableFieldOutline').setAttribute('stroke', calibrated ? ROBOTS.fable.accent : '#c15f3c');
+      el('fableNavSubtitle').textContent = calibrated
+        ? 'Calibrated field corners active'
+        : (hasCurrent ? `Fallback field: ${FABLE_FIELD_METERS.toFixed(1)} m around first GPS fix` : (fableNav.error || 'Waiting for GPS telemetry...'));
+      el('fableCurrentCoord').textContent = formatCoord(fableNav.lat, fableNav.lon);
+      el('fableGpsQuality').textContent = `${fixLabel}, sats ${fableNav.satellites || 0}, HDOP ${fableNav.hdop ?? '--'}`;
+      el('fableLinkState').textContent = fableNav.link_alive ? `driver heartbeat alive, age ${fableNav.command_age_ms ?? '--'} ms` : 'telemetry received, waiting for driver heartbeat';
+
+      if (!fableSelectedTarget && fableNav.target_valid && fableNav.target_lat !== null && fableNav.target_lon !== null) {
+        fableSelectedTarget = { lat: fableNav.target_lat, lon: fableNav.target_lon };
+      }
+      el('fableTargetCoord').textContent = fableSelectedTarget ? formatCoord(fableSelectedTarget.lat, fableSelectedTarget.lon) : 'Click the field';
+      el('fableSendTargetBtn').disabled = !fableSelectedTarget || !fableNav.serial_ok;
+
+      const currentPoint = hasCurrent ? fableLatLonToPoint(fableNav.lat, fableNav.lon) : null;
+      const targetPoint = fableSelectedTarget ? fableLatLonToPoint(fableSelectedTarget.lat, fableSelectedTarget.lon) : null;
+      placeDot('fableCurrentDot', currentPoint);
+      placeDot('fableTargetDot', targetPoint);
+      setTargetLine(currentPoint, targetPoint);
+      el('fableFieldEmpty').style.display = (hasCurrent || calibrated) ? 'none' : 'flex';
+    }
+
+    function cornerInputIds(corner) {
+      const prefix = { nw: 'Nw', ne: 'Ne', se: 'Se', sw: 'Sw' }[corner];
+      return { lat: `cal${prefix}Lat`, lon: `cal${prefix}Lon` };
+    }
+
+    function setCornerInputs(corner, point) {
+      const ids = cornerInputIds(corner);
+      el(ids.lat).value = point && point.lat !== undefined ? Number(point.lat).toFixed(7) : '';
+      el(ids.lon).value = point && point.lon !== undefined ? Number(point.lon).toFixed(7) : '';
+    }
+
+    function getCornerInputs(corner) {
+      const ids = cornerInputIds(corner);
+      const lat = Number(el(ids.lat).value);
+      const lon = Number(el(ids.lon).value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      return { lat, lon };
+    }
+
+    function openFableCalibrationModal() {
+      for (const corner of ['nw', 'ne', 'se', 'sw']) {
+        setCornerInputs(corner, fableFieldCalibration ? fableFieldCalibration[corner] : null);
+      }
+      el('fableCalibrationModal').classList.remove('hidden');
+    }
+
+    function closeFableCalibrationModal() {
+      el('fableCalibrationModal').classList.add('hidden');
+    }
+
+    function saveFableCalibrationFromInputs() {
+      const calibration = {};
+      for (const corner of ['nw', 'ne', 'se', 'sw']) {
+        const point = getCornerInputs(corner);
+        if (!point) {
+          alert('Please enter valid latitude and longitude for all four corners.');
+          return;
+        }
+        calibration[corner] = point;
+      }
+      saveFableFieldCalibration(calibration);
+      closeFableCalibrationModal();
     }
 
     function frameLine(frame) {
@@ -715,6 +1292,7 @@ INDEX_HTML = r"""<!doctype html>
       if (status.active_robot && status.active_robot !== activeRobot) {
         setActiveRobot(status.active_robot, true);
       }
+      if (status.fable_nav) updateFableNav(status.fable_nav);
       setPill('gamepadPill', status.gamepad_ok ? 'ok' : 'bad', status.gamepad_ok ? 'Gamepad OK' : 'Gamepad Down');
       setPill('serialPill', status.serial_ok ? 'ok' : 'bad', status.serial_ok ? 'Serial OK' : 'Serial Down');
       if (status.error) {
@@ -739,6 +1317,10 @@ INDEX_HTML = r"""<!doctype html>
         appendFrame(frame);
         if (frame.robot_key === activeRobot) renderLatest(frame);
         setPill('streamPill', 'ok', 'Dashboard Live');
+      });
+      source.addEventListener('fable_nav', e => {
+        lastEventAt = Date.now();
+        updateFableNav(JSON.parse(e.data));
       });
       source.addEventListener('notice', e => {
         const line = document.createElement('div');
@@ -772,6 +1354,62 @@ INDEX_HTML = r"""<!doctype html>
       }
     });
 
+    el('fableCalibrateBtn').addEventListener('click', openFableCalibrationModal);
+    el('fableCalCloseBtn').addEventListener('click', closeFableCalibrationModal);
+    el('fableCalCancelBtn').addEventListener('click', closeFableCalibrationModal);
+    el('fableCalSaveBtn').addEventListener('click', saveFableCalibrationFromInputs);
+    el('fableCalClearBtn').addEventListener('click', () => {
+      saveFableFieldCalibration(null);
+      for (const corner of ['nw', 'ne', 'se', 'sw']) {
+        setCornerInputs(corner, null);
+      }
+      closeFableCalibrationModal();
+    });
+    document.querySelectorAll('.use-current').forEach(button => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        if (!fableNav.gps_valid || fableNav.lat === null || fableNav.lon === null) {
+          alert('No current GPS fix is available yet.');
+          return;
+        }
+        setCornerInputs(button.dataset.corner, { lat: fableNav.lat, lon: fableNav.lon });
+      });
+    });
+
+    el('fableField').addEventListener('click', event => {
+      if (!fableFieldCalibration && !fableFieldCenter) return;
+      const rect = el('fableField').getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * 100;
+      const y = ((event.clientY - rect.top) / rect.height) * 100;
+      fableSelectedTarget = fablePointToLatLon(x, y);
+      updateFableNav(fableNav);
+    });
+
+    el('fableSendTargetBtn').addEventListener('click', async () => {
+      if (!fableSelectedTarget) return;
+      el('fableSendTargetBtn').disabled = true;
+      const response = await fetch('/api/fable/target', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fableSelectedTarget)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!payload.ok) {
+        updateFableNav({ error: payload.error || 'Failed to send target.' });
+      }
+    });
+
+    el('fableCancelAutoBtn').addEventListener('click', async () => {
+      const response = await fetch('/api/fable/cancel', { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+      if (payload.ok) {
+        fableSelectedTarget = null;
+        updateFableNav({ mode: 'teleop', target_valid: false, target_lat: null, target_lon: null });
+      } else {
+        updateFableNav({ error: payload.error || 'Failed to cancel Fable auto.' });
+      }
+    });
+
     el('clearBtn').addEventListener('click', () => {
       logs[activeRobot] = [];
       renderLog();
@@ -786,6 +1424,7 @@ INDEX_HTML = r"""<!doctype html>
       if (Date.now() - lastEventAt > 900) setPill('streamPill', 'warn', 'No Recent Frames');
     }, 250);
 
+    loadFableFieldCalibration();
     setActiveRobot('flash', true);
     connectEvents();
   </script>
@@ -799,6 +1438,7 @@ def apply_robot_accents(html):
         "__ROBOT_ACCENT_FLASH__": ROBOT_ACCENTS["flash"],
         "__ROBOT_ACCENT_FABLE__": ROBOT_ACCENTS["fable"],
         "__ROBOT_ACCENT_SOL__": ROBOT_ACCENTS["sol"],
+        "__FABLE_FIELD_METERS__": str(FABLE_NAV_DEFAULT_FIELD_METERS),
     }
 
     for token, value in replacements.items():
@@ -825,6 +1465,32 @@ class SharedState:
         self.driver1_until = 0.0
         self.latest_by_robot = {}
         self.logs = {key: deque(maxlen=LOG_BACKLOG) for key in ROBOTS}
+        self.fable_nav_serial = None
+        self.fable_nav_serial_lock = threading.Lock()
+        self.fable_nav = {
+            "serial_ok": False,
+            "error": "",
+            "mode": "teleop",
+            "target_pending": False,
+            "last_update_ms": 0,
+            "nav_seq": 0,
+            "target_seq": 0,
+            "lat": None,
+            "lon": None,
+            "target_lat": None,
+            "target_lon": None,
+            "selected_lat": None,
+            "selected_lon": None,
+            "gps_valid": False,
+            "target_valid": False,
+            "link_alive": False,
+            "fix_quality": 0,
+            "satellites": 0,
+            "hdop": None,
+            "gps_age_ms": None,
+            "command_age_ms": None,
+            "uptime_ms": None,
+        }
 
     def add_client(self):
         q = queue.Queue(maxsize=EVENT_BACKLOG)
@@ -862,6 +1528,7 @@ class SharedState:
                 "error": self.error,
                 "version": VERSION,
                 "frame_len": FRAME_LEN,
+                "fable_nav": dict(self.fable_nav),
             }
 
     def set_status(self, **kwargs):
@@ -884,6 +1551,7 @@ class SharedState:
             "error": self.error,
             "version": VERSION,
             "frame_len": FRAME_LEN,
+            "fable_nav": dict(self.fable_nav),
         }
 
     def set_active_robot(self, robot_key):
@@ -910,6 +1578,29 @@ class SharedState:
             self.latest_by_robot[robot_key] = payload
             self.logs[robot_key].append(payload)
         self.publish("frame", payload)
+
+    def set_fable_nav_serial(self, ser):
+        with self.fable_nav_serial_lock:
+            self.fable_nav_serial = ser
+
+    def send_fable_nav_line(self, line):
+        with self.fable_nav_serial_lock:
+            if self.fable_nav_serial is None:
+                return False, "Fable navigation serial is not connected."
+            self.fable_nav_serial.write((line.rstrip() + "\n").encode("ascii"))
+            self.fable_nav_serial.flush()
+            return True, ""
+
+    def update_fable_nav(self, updates):
+        with self.lock:
+            self.fable_nav.update(updates)
+            self.fable_nav["last_update_ms"] = int(time.time() * 1000)
+            payload = dict(self.fable_nav)
+        self.publish("fable_nav", payload)
+
+    def set_fable_nav_mode(self, mode, **updates):
+        updates["mode"] = mode
+        self.update_fable_nav(updates)
 
 
 def apply_deadband(value, deadband=0.06):
@@ -1143,6 +1834,89 @@ def run_transmitter(args, shared):
         pygame.quit()
 
 
+def e7_to_degrees(value):
+    if value is None:
+        return None
+    return value / 10000000.0
+
+
+def degrees_to_e7(value):
+    return int(round(float(value) * 10000000))
+
+
+def apply_fable_nav_message(shared, message):
+    if message.get("type") == "telemetry":
+        flags = int(message.get("flags", 0))
+        hdop_x100 = message.get("hdop_x100")
+        updates = {
+            "serial_ok": True,
+            "error": "",
+            "nav_seq": int(message.get("nav_seq", 0)),
+            "target_seq": int(message.get("target_seq", 0)),
+            "lat": e7_to_degrees(message.get("lat_e7")),
+            "lon": e7_to_degrees(message.get("lon_e7")),
+            "target_lat": e7_to_degrees(message.get("target_lat_e7")),
+            "target_lon": e7_to_degrees(message.get("target_lon_e7")),
+            "gps_valid": bool(flags & 0x01),
+            "target_valid": bool(flags & 0x02),
+            "link_alive": bool(flags & 0x10),
+            "fix_quality": int(message.get("fix", 0)),
+            "satellites": int(message.get("satellites", 0)),
+            "hdop": None if hdop_x100 is None else float(hdop_x100) / 100.0,
+            "gps_age_ms": message.get("gps_age_ms"),
+            "command_age_ms": message.get("command_age_ms"),
+            "uptime_ms": message.get("uptime_ms"),
+        }
+        with shared.lock:
+            current_mode = shared.fable_nav.get("mode")
+        if updates["target_valid"] and current_mode == "teleop":
+            updates["mode"] = "autonomous"
+        shared.update_fable_nav(updates)
+        return
+
+    if message.get("type") == "send":
+        if message.get("ok"):
+            shared.update_fable_nav({"serial_ok": True, "error": ""})
+        else:
+            shared.update_fable_nav({"serial_ok": True, "error": message.get("error", "Fable nav send failed.")})
+
+
+def run_fable_nav_serial(args, shared):
+    if not args.fable_nav_port:
+        shared.update_fable_nav({"serial_ok": False, "error": "Fable nav ESP not connected. Start with --fable-nav-port to enable GPS telemetry."})
+        return
+
+    ser = None
+    try:
+        ser = serial.Serial(args.fable_nav_port, args.fable_nav_baud, timeout=0.2)
+        time.sleep(1.0)
+        shared.set_fable_nav_serial(ser)
+        shared.update_fable_nav({"serial_ok": True, "error": ""})
+        shared.publish("notice", {"message": f"Fable nav serial open: {args.fable_nav_port} @ {args.fable_nav_baud}"})
+
+        while True:
+            raw = ser.readline()
+            if not raw:
+                continue
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                shared.publish("notice", {"message": f"Fable nav serial: {line}"})
+                continue
+            apply_fable_nav_message(shared, message)
+
+    except Exception as exc:
+        shared.update_fable_nav({"serial_ok": False, "error": str(exc)})
+        shared.publish("notice", {"message": f"Fable nav serial stopped: {exc}"})
+    finally:
+        shared.set_fable_nav_serial(None)
+        if ser is not None:
+            ser.close()
+
+
 def create_app(shared):
     app = Flask(__name__)
 
@@ -1163,6 +1937,53 @@ def create_app(shared):
     @app.post("/api/driver1")
     def driver1():
         shared.pulse_driver1()
+        return jsonify({"ok": True})
+
+    @app.post("/api/fable/target")
+    def fable_target():
+        payload = request.get_json(silent=True) or {}
+        try:
+            lat = float(payload["lat"])
+            lon = float(payload["lon"])
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"ok": False, "error": "lat and lon are required numbers"}), 400
+
+        lat_e7 = degrees_to_e7(lat)
+        lon_e7 = degrees_to_e7(lon)
+        ok, error = shared.send_fable_nav_line(f"TARGET {lat_e7} {lon_e7}")
+        if not ok:
+            shared.update_fable_nav({"selected_lat": lat, "selected_lon": lon, "target_pending": True, "error": error})
+            return jsonify({"ok": False, "error": error}), 503
+
+        shared.set_fable_nav_mode(
+            "autonomous",
+            selected_lat=lat,
+            selected_lon=lon,
+            target_lat=lat,
+            target_lon=lon,
+            target_valid=True,
+            target_pending=False,
+            error="",
+        )
+        return jsonify({"ok": True, "lat": lat, "lon": lon})
+
+    @app.post("/api/fable/cancel")
+    def fable_cancel():
+        ok, error = shared.send_fable_nav_line("CLEAR")
+        if not ok:
+            shared.update_fable_nav({"error": error})
+            return jsonify({"ok": False, "error": error}), 503
+
+        shared.set_fable_nav_mode(
+            "teleop",
+            target_pending=False,
+            target_valid=False,
+            selected_lat=None,
+            selected_lon=None,
+            target_lat=None,
+            target_lon=None,
+            error="",
+        )
         return jsonify({"ok": True})
 
     @app.get("/events")
@@ -1193,6 +2014,8 @@ def main():
     parser.add_argument("--hz", type=float, default=FRAME_RATE_HZ)
     parser.add_argument("--web-host", default="127.0.0.1")
     parser.add_argument("--web-port", type=int, default=8765)
+    parser.add_argument("--fable-nav-port", help="optional driver-side ESP32-C3 serial port for Fable GPS/ESP-NOW navigation")
+    parser.add_argument("--fable-nav-baud", type=int, default=FABLE_NAV_SERIAL_BAUD)
     parser.add_argument("--l1-button", type=int, default=9, help="pygame button index for PS4 L1/LB")
     parser.add_argument("--r1-button", type=int, default=10, help="pygame button index for PS4 R1/RB")
     parser.add_argument("--dpad-up-button", type=int, default=11, help="fallback pygame button index for D-pad up")
@@ -1208,6 +2031,9 @@ def main():
         daemon=True,
     )
     server_thread.start()
+
+    fable_nav_thread = threading.Thread(target=run_fable_nav_serial, args=(args, shared), daemon=True)
+    fable_nav_thread.start()
 
     print(f"Dashboard: http://{args.web_host}:{args.web_port}")
     print("Press Ctrl-C to stop.")

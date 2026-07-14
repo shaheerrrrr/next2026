@@ -93,6 +93,12 @@ Run:
 python driver_station_flask.py --port /dev/cu.usbmodem11301 --hz 20
 ```
 
+With Fable GPS navigation enabled, also connect the driver-side ESP32-C3 and pass its serial port:
+
+```bash
+python driver_station_flask.py --port /dev/cu.usbmodem11301 --fable-nav-port /dev/cu.usbmodemXXXXX --hz 20
+```
+
 Open:
 
 ```text
