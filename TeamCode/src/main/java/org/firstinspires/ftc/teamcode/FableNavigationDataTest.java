@@ -9,20 +9,22 @@ import org.firstinspires.ftc.teamcode.subsystems.NavigationSubsystem;
 
 @TeleOp(name = "Fable: Navigation Data Test", group = "Test")
 public class FableNavigationDataTest extends LinearOpMode {
+    private static final long POLL_INTERVAL_MS = 1000;
+
     @Override
     public void runOpMode() {
         NavigationSubsystem navigation = new NavigationSubsystem(hardwareMap);
-        telemetry.setMsTransmissionInterval(100);
+        telemetry.setMsTransmissionInterval((int) POLL_INTERVAL_MS);
 
         boolean lastY = false;
         while (opModeInInit()) {
             lastY = updateAndShow(navigation, lastY);
-            sleep(100);
+            sleep(POLL_INTERVAL_MS);
         }
 
         while (opModeIsActive()) {
             lastY = updateAndShow(navigation, lastY);
-            sleep(100);
+            sleep(POLL_INTERVAL_MS);
         }
     }
 

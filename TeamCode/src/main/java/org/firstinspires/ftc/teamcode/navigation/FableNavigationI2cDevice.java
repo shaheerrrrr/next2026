@@ -1,20 +1,23 @@
 package org.firstinspires.ftc.teamcode.navigation;
 
+import android.os.SystemClock;
+
 import com.qualcomm.robotcore.hardware.HardwareDevice;
 import com.qualcomm.robotcore.hardware.I2cAddr;
 import com.qualcomm.robotcore.hardware.I2cDeviceSynchDevice;
 import com.qualcomm.robotcore.hardware.I2cDeviceSynchSimple;
+import com.qualcomm.robotcore.hardware.I2cWaitControl;
 import com.qualcomm.robotcore.hardware.configuration.annotations.DeviceProperties;
 import com.qualcomm.robotcore.hardware.configuration.annotations.I2cDeviceType;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** FTC hardware driver for Fable's robot-side navigation ESP32-C3. */
+/** FTC hardware driver for Fable's RP2040 navigation bridge. */
 @I2cDeviceType
 @DeviceProperties(
         name = "Fable ESP Navigation",
-        description = "GPS and target data from Fable's robot-side ESP32-C3",
+        description = "GPS and target data from Fable's RP2040 navigation bridge",
         xmlTag = "FableEspNavigation")
 public class FableNavigationI2cDevice
         extends I2cDeviceSynchDevice<I2cDeviceSynchSimple> {
@@ -22,6 +25,8 @@ public class FableNavigationI2cDevice
     public static final int PACKET_REGISTER = 0x00;
     public static final int PACKET_LENGTH = 56;
     public static final int PROTOCOL_VERSION = 1;
+    private static final int READ_CHUNK_LENGTH = 14;
+    private static final long REGISTER_SETTLE_MS = 10;
 
     public static final int FLAG_LOCATION_VALID = 1 << 0;
     public static final int FLAG_TARGET_VALID = 1 << 1;
@@ -51,28 +56,39 @@ public class FableNavigationI2cDevice
         return true;
     }
 
-    /**
-     * Performs one explicit I2C transaction. No background read window is configured, so the
-     * Control Hub only polls the ESP when this method is called.
-     */
+    /** Performs four short I2C reads. No background read window is configured. */
     public EspNavigationData readNavigationData() {
         long readTimeNanos = System.nanoTime();
-        final byte[] bytes;
+        final byte[] bytes = new byte[PACKET_LENGTH];
 
         try {
-            bytes = deviceClient.read(PACKET_REGISTER, PACKET_LENGTH);
+            for (int offset = 0; offset < PACKET_LENGTH; offset += READ_CHUNK_LENGTH) {
+                int chunkLength = Math.min(READ_CHUNK_LENGTH, PACKET_LENGTH - offset);
+
+                // Keep register selection and reading as separate bus transactions. The short
+                // settling margin also makes captures and diagnostics easier to interpret.
+                deviceClient.write8(PACKET_REGISTER + offset, I2cWaitControl.WRITTEN);
+                SystemClock.sleep(REGISTER_SETTLE_MS);
+                byte[] chunk = deviceClient.read(chunkLength);
+
+                if (chunk == null || chunk.length != chunkLength) {
+                    int actualLength = chunk == null ? -1 : chunk.length;
+                    return EspNavigationData.invalid(
+                            EspNavigationData.Status.WRONG_LENGTH,
+                            String.format(
+                                    "Register 0x%02X expected %d bytes, received %d",
+                                    PACKET_REGISTER + offset,
+                                    chunkLength,
+                                    actualLength),
+                            readTimeNanos);
+                }
+
+                System.arraycopy(chunk, 0, bytes, offset, chunkLength);
+            }
         } catch (RuntimeException e) {
             return EspNavigationData.invalid(
                     EspNavigationData.Status.I2C_ERROR,
                     e.getClass().getSimpleName() + ": " + e.getMessage(),
-                    readTimeNanos);
-        }
-
-        if (bytes == null || bytes.length != PACKET_LENGTH) {
-            int actualLength = bytes == null ? -1 : bytes.length;
-            return EspNavigationData.invalid(
-                    EspNavigationData.Status.WRONG_LENGTH,
-                    "Expected " + PACKET_LENGTH + " bytes, received " + actualLength,
                     readTimeNanos);
         }
 
@@ -82,7 +98,7 @@ public class FableNavigationI2cDevice
                 || bytes[3] != MAGIC_3) {
             return EspNavigationData.invalid(
                     EspNavigationData.Status.BAD_MAGIC,
-                    "Packet magic was not FNAV",
+                    "Packet magic was not FNAV; " + diagnosticHex(bytes),
                     readTimeNanos);
         }
 
@@ -107,7 +123,11 @@ public class FableNavigationI2cDevice
         if (expectedCrc != actualCrc) {
             return EspNavigationData.invalid(
                     EspNavigationData.Status.BAD_CHECKSUM,
-                    String.format("CRC expected 0x%04X, calculated 0x%04X", expectedCrc, actualCrc),
+                    String.format(
+                            "CRC expected 0x%04X, calculated 0x%04X; %s",
+                            expectedCrc,
+                            actualCrc,
+                            diagnosticHex(bytes)),
                     readTimeNanos);
         }
 
@@ -170,5 +190,20 @@ public class FableNavigationI2cDevice
 
     private static long unsignedInt(int value) {
         return value & 0xFFFF_FFFFL;
+    }
+
+    private static String diagnosticHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder("first=");
+        appendHex(result, bytes, 0, 8);
+        result.append(" last=");
+        appendHex(result, bytes, PACKET_LENGTH - 4, 4);
+        return result.toString();
+    }
+
+    private static void appendHex(StringBuilder result, byte[] bytes, int offset, int length) {
+        for (int i = 0; i < length; i++) {
+            if (i > 0) result.append(' ');
+            result.append(String.format("%02X", unsignedByte(bytes[offset + i])));
+        }
     }
 }

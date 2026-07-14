@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.navigation;
 
-/** Immutable result of one I2C navigation packet read from the robot-side ESP32-C3. */
+/** Immutable result of one navigation packet read through the robot-side Pico bridge. */
 public final class EspNavigationData {
     public enum Status {
         OK,

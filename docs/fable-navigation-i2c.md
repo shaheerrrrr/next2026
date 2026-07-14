@@ -1,46 +1,192 @@
-# Fable Navigation I2C Interface
+# Fable Navigation Sidecar
 
-This document defines the first robot-side data layer for Fable's point-to-point navigation. The Control Hub explicitly polls a robot-side ESP32-C3 for GPS and target data, reads heading from its own integrated IMU, and calculates target distance, bearing, and heading error.
+This document defines Fable's GPS and target-coordinate data path. It covers data transport and navigation telemetry only. The current code does not command the drivetrain, switch modes, or perform obstacle avoidance.
 
-This phase never commands the drivetrain. The working tele-op OpMode remains unchanged.
+The proven LoRa USB HID tele-op path is independent and remains unchanged.
 
-## Data Ownership
+## Architecture
 
-- The robot ESP32-C3 owns GPS parsing, the latest target received over ESP-NOW, and link-health timestamps.
-- The Control Hub is the I2C controller and explicitly requests one fixed-size snapshot.
-- The ESP32-C3 is the I2C peripheral at 7-bit address `0x42`.
-- The Control Hub owns IMU heading. Heading is not sent over I2C in protocol version 1.
-- `NavigationSubsystem.poll()` is the only operation that performs an I2C read. Future combined robot code should call it only while point-to-point mode is active.
+```text
+Adafruit Ultimate GPS
+  | 9600-baud UART
+  v
+Robot ESP32-C3
+  |-- ESP-NOW <--------------------------> Driver ESP32-C3 / laptop
+  |                                         telemetry out, target commands back
+  |
+  | 115200-baud UART, 56-byte FNAV snapshots
+  v
+Raspberry Pi Pico WH
+  | 100 kHz I2C peripheral, address 0x42
+  v
+REV Control Hub
+  |-- custom FTC hardware driver
+  |-- integrated IMU heading
+  v
+NavigationSubsystem / FableNavigationDataTest
+```
+
+### Data ownership
+
+- The robot ESP32-C3 parses GPS data and owns the latest target received over ESP-NOW.
+- The ESP32-C3 builds the canonical 56-byte `FNAV` snapshot and sends it to the Pico at 10 Hz.
+- The Pico validates magic, version, length, and CRC before publishing a snapshot. A bad or partial UART frame never replaces the last good one.
+- The Pico is an I2C peripheral at 7-bit address `0x42`. The Control Hub is the I2C controller.
+- The Control Hub owns IMU heading. Heading is not part of protocol version 1.
+- `NavigationSubsystem.poll()` is the only robot operation that reads navigation data. It calculates geometry but never drives motors.
+
+The Pico serves a valid startup packet with no GPS or target flags before the first C3 packet arrives. Therefore, a powered Pico with no C3 connection should report `I2C: OK` and `GPS location is invalid`, not `BAD_MAGIC` or `BAD_CHECKSUM`.
+
+## Firmware
+
+| Device | Source |
+| --- | --- |
+| Robot ESP32-C3 | `esp/fable_robot_nav_uart/fable_robot_nav_uart.ino` |
+| Raspberry Pi Pico WH | `pico/fable_navigation_bridge/` |
+| Control Hub test | `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/FableNavigationDataTest.java` |
+
+The driver-side ESP firmware and laptop application do not change for this bridge. Their ESP-NOW packet formats remain the deployed formats used by the robot ESP sketch.
 
 ## Wiring
 
-Use a REV JST-PH 4-pin sensor cable connected to I2C Bus 1, 2, or 3. Avoid Bus 0 for this first integration because the Control Hub's internal IMU is already on Bus 0.
+Disconnect robot battery power and USB power before changing signal wiring. All three robot-side boards must share ground.
 
-| REV I2C cable | Function | ESP32-C3 |
+### GPS to robot ESP32-C3
+
+| Adafruit Ultimate GPS | ESP32-C3 | Notes |
 | --- | --- | --- |
-| Black | Ground | GND |
-| White | SDA | A free GPIO configured as I2C SDA |
-| Blue | SCL | A free GPIO configured as I2C SCL |
-| Red | 3.3 V | Leave disconnected when powering the ESP separately |
+| VIN | 3V3 | The breakout accepts 3-5 V. |
+| GND | GND | Common signal ground. |
+| TX | GPIO 4 | GPS output to ESP RX. |
+| RX | GPIO 5 | ESP TX to GPS input. |
 
-The working GPS sketch already uses GPIO 4 for GPS RX and GPIO 5 for GPS TX. Do not reuse those pins for I2C. Select two other GPIOs supported by the exact ESP32-C3 board.
+The GPS defaults to 9600 baud. TX and RX are crossed. `FIX`, `PPS`, `VBAT`, and `EN` are not required.
 
-Power the ESP32-C3 through its `5V`, `VIN`, or USB power input from a regulated 5 V source such as a Control Hub auxiliary 5 V output. Confirm the board's exact input pin before connecting it. Do not put 5 V on SDA, SCL, or a 3.3 V pin. The Control Hub and ESP must share ground.
+### Robot ESP32-C3 to Pico WH
 
-REV Hub I2C uses 3.3 V signaling. The I2C cable color convention is black ground, red power, blue SCL, and white SDA. See the [REV I2C documentation](https://docs.revrobotics.com/duo-control/sensors/i2c).
+| ESP32-C3 | Pico WH | Pico physical pin | Function |
+| --- | --- | ---: | --- |
+| GPIO 6 | GP1 | 2 | C3 TX to Pico UART0 RX |
+| GPIO 7 | GP0 | 1 | C3 RX from Pico UART0 TX; reserved for future use |
+| GND | GND | 3 | Common ground |
 
-## Robot Configuration
+The current protocol is one-way from C3 to Pico, but wire both UART directions now. Both boards use 3.3 V logic, so no level shifter is required. Do not connect either UART signal to 5 V.
 
-1. Build and install TeamCode once so the custom device type is available.
-2. Open the active Robot Configuration from the Driver Station.
-3. Select the chosen Control Hub I2C bus.
-4. Add `Fable ESP Navigation` and name it exactly `FableNav`.
-5. Confirm the integrated IMU is configured as `imu`.
+### Pico WH to REV Control Hub
+
+Use a REV JST-PH 4-pin sensor cable on I2C Bus 1, 2, or 3. The existing configuration uses Bus 1, Port 0.
+
+| REV I2C wire | Pico WH | Pico physical pin | Function |
+| --- | --- | ---: | --- |
+| Black | GND | 8 | Ground |
+| White | GP4 | 6 | I2C0 SDA |
+| Blue | GP5 | 7 | I2C0 SCL |
+| Red | Not connected | - | Do not use for bridge power |
+
+The REV bus is 3.3 V and already has pull-up resistors. The Pico firmware also enables its weak internal pull-ups as a wiring fail-safe.
+
+### Power
+
+For installed robot operation, use one Control Hub `+5V Power` auxiliary output:
+
+| Control Hub auxiliary output | Destination |
+| --- | --- |
+| +5 V | Pico `VSYS`, physical pin 39 |
+| +5 V | ESP32-C3 board `5V` or `VIN` input |
+| Ground | Pico GND and ESP32-C3 GND |
+
+Only use the pin on the exact C3 board documented as a regulated 5 V input. Do not apply 5 V to a C3 `3V3` pin. The GPS can be powered from the C3's 3V3 output as shown above.
+
+During bench flashing, power each board by USB and leave the Control Hub auxiliary 5 V disconnected. Avoid powering the Pico from USB and external VSYS at the same time during initial bring-up.
+
+## Flashing the Pico WH
+
+The Pico bridge uses the official Raspberry Pi Pico C/C++ SDK, including its interrupt-driven `pico_i2c_slave` implementation.
+
+### Recommended: Raspberry Pi Pico VS Code extension
+
+1. Install Visual Studio Code and the official `Raspberry Pi Pico` extension.
+2. Import `pico/fable_navigation_bridge` as an existing Pico project.
+3. Select board `Pico W` (`pico_w`). Pico W and Pico WH use the same board target.
+4. Build the `fable_navigation_bridge` target.
+5. Hold the Pico's `BOOTSEL` button while connecting its USB cable.
+6. Release `BOOTSEL` after the `RPI-RP2` drive appears.
+7. Copy `fable_navigation_bridge.uf2` from the build directory to `RPI-RP2`, or use the extension's Run command.
+8. The Pico reboots automatically. Its USB serial output appears at 115200 baud.
+
+Expected USB serial output:
+
+```text
+Fable Pico bridge ready: UART0 GP1(RX)/GP0(TX), I2C0 GP4/GP5 @ 0x42
+uart_ok=10 uart_bad=0 i2c_transactions=0
+```
+
+`uart_ok` should increase by about 10 per second after the robot ESP is connected. `uart_bad` should remain zero. `i2c_transactions` increases when the Control Hub test reads the device.
+
+### Command-line build
+
+After installing the Pico SDK and Arm toolchain:
+
+```bash
+export PICO_SDK_PATH=/absolute/path/to/pico-sdk
+cmake -S pico/fable_navigation_bridge \
+  -B pico/fable_navigation_bridge/build \
+  -DPICO_BOARD=pico_w
+cmake --build pico/fable_navigation_bridge/build
+```
+
+Flash `pico/fable_navigation_bridge/build/fable_navigation_bridge.uf2` with `BOOTSEL` as described above.
+
+## Flashing the Robot ESP32-C3
+
+1. Open `esp/fable_robot_nav_uart/fable_robot_nav_uart.ino` in Arduino IDE.
+2. Select the exact ESP32-C3 board and port previously used for the working GPS/ESP-NOW sketch.
+3. Install `TinyGPSPlus` through Library Manager if it is not already installed.
+4. Use the same ESP32 Arduino core version as the deployed working sketch.
+5. If the board menu offers `USB CDC On Boot`, enable it so USB logging does not consume UART0. Logging is not required by this sketch.
+6. Upload the sketch.
+
+UART0 is now dedicated to GPIO 6/7 for the Pico. GPS remains on UART1 at GPIO 4/5. ESP-NOW channel, command packets, and telemetry packets are unchanged from the supplied working firmware.
+
+## Control Hub Setup
+
+No navigation protocol or OpMode changes are required for the bridge.
+
+1. Build and install the Robot Controller app from this repository.
+2. Open the active Robot Configuration.
+3. On I2C Bus 1, Port 0, add `Fable ESP Navigation`.
+4. Name it exactly `FableNav`.
+5. Confirm the integrated IMU is named `imu`.
 6. Save and activate the configuration.
+7. Run `Fable: Navigation Data Test`.
 
-## Protocol Version 1
+The test polls once per second and never initializes or commands the drivetrain.
 
-The Control Hub reads 56 bytes beginning at register `0x00`. All multi-byte values are little-endian. Coordinates are signed degrees multiplied by `10,000,000` so the wire representation is deterministic across C++ and Java.
+## Bring-Up Order
+
+Test one boundary at a time:
+
+1. Flash and USB-power only the Pico. Connect it to the Hub I2C port and run the test OpMode. Expect `I2C: OK` and invalid GPS.
+2. Connect C3 ground and UART to the Pico, then power the C3. Confirm Pico USB serial `uart_ok` increases and `uart_bad` stays zero.
+3. Connect the GPS. Indoors, packet status should remain `OK`; only GPS validity may remain false.
+4. Move outdoors with a clear sky view. Confirm sequence, coordinates, satellite count, and GPS age update.
+5. Start the driver-side ESP/laptop process. Confirm driver link status and target data propagate through ESP-NOW, UART, I2C, and telemetry.
+
+Stop and isolate the indicated boundary if a check fails:
+
+| Symptom | Likely boundary |
+| --- | --- |
+| `BAD_MAGIC`, `BAD_CHECKSUM`, or I2C warning with Pico alone | Pico-to-Hub wiring, firmware, or Robot Configuration |
+| `I2C: OK`, but `uart_ok` stays zero | C3-to-Pico UART wiring, pin mapping, or C3 firmware |
+| `uart_bad` increases | UART noise, mismatched baud, ground, or corrupted C3 packets |
+| Packet `OK`, GPS invalid, character count zero | GPS power or GPS TX-to-GPIO4 wiring |
+| GPS valid, target invalid | Driver ESP-NOW command path |
+
+## I2C Protocol Version 1
+
+The packet is a 56-byte read-only register map beginning at register `0x00`. The Control Hub reads offsets `0x00`, `0x0E`, `0x1C`, and `0x2A`, requesting 14 bytes each. The Pico latches the latest complete UART snapshot when register `0x00` is selected and serves all four chunks from that same copy.
+
+All multi-byte values are little-endian. Coordinates are signed degrees multiplied by `10,000,000`.
 
 | Offset | Size | Type | Field |
 | ---: | ---: | --- | --- |
@@ -56,14 +202,14 @@ The Control Hub reads 56 bytes beginning at register `0x00`. All multi-byte valu
 | 24 | 4 | int32 | Target latitude degrees x 1e7 |
 | 28 | 4 | int32 | Target longitude degrees x 1e7 |
 | 32 | 4 | uint32 | GPS location age in milliseconds |
-| 36 | 4 | uint32 | Age of last valid driver ESP-NOW command in milliseconds |
+| 36 | 4 | uint32 | Age of last valid driver command in milliseconds |
 | 40 | 2 | uint16 | HDOP x 100 |
 | 42 | 1 | uint8 | Satellite count, clamped to 255 |
-| 43 | 1 | uint8 | Reserved, write zero |
+| 43 | 1 | uint8 | Reserved, zero |
 | 44 | 4 | uint32 | GPS characters processed |
 | 48 | 4 | uint32 | ESP uptime in milliseconds |
-| 52 | 2 | uint16 | Reserved, write zero |
-| 54 | 2 | uint16 | CRC-16/CCITT-FALSE over bytes 0 through 53 |
+| 52 | 2 | uint16 | Reserved, zero |
+| 54 | 2 | uint16 | CRC-16/CCITT-FALSE over bytes 0-53 |
 
 Flag byte at offset 6:
 
@@ -75,25 +221,23 @@ Flag byte at offset 6:
 | 3 | `0x08` | HDOP is valid |
 | 4 | `0x10` | Driver ESP-NOW link is alive |
 
-CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, and no final XOR. The ESP must build the next packet in a separate buffer and atomically publish the complete buffer so an I2C read cannot observe half-updated coordinates.
+CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, and no final XOR.
 
 ## IMU Heading Frame
 
-GPS bearing uses compass convention: north is 0 degrees and east is 90 degrees. FTC IMU yaw is counterclockwise-positive, so robot compass heading is calculated as normalized `-yaw`.
+GPS bearing uses compass convention: north is 0 degrees and east is 90 degrees. FTC IMU yaw is counterclockwise-positive, so robot compass heading is normalized `-yaw`.
 
-Before testing navigation geometry:
-
-1. Point Fable's forward direction toward the field direction defined as north.
+1. Point Fable forward toward the field direction defined as north.
 2. Press Y/Triangle in the test OpMode to reset IMU yaw.
 3. Confirm compass heading is near 0 degrees.
-4. Turn Fable clockwise/right and confirm compass heading increases toward 90 degrees.
+4. Turn Fable clockwise and confirm compass heading increases toward 90 degrees.
 
-`NavigationSubsystem` currently assumes the Control Hub logo faces up and its USB port faces forward. Change `HUB_LOGO_FACING` and `HUB_USB_FACING` if Fable's physical installation differs.
+`NavigationSubsystem` is configured for Fable's installed Control Hub orientation: logo facing up and USB port facing backward.
 
-## Test OpMode
+## Hardware References
 
-Run `Fable: Navigation Data Test` from the `Test` group. It polls at approximately 10 Hz and displays packet validation, GPS quality, link age, coordinates, sequences, IMU heading, target distance, target bearing, and heading error.
-
-The OpMode reports ready only when the packet and checksum are valid, the GPS fix is good and recent, a target exists, the driver ESP-NOW link is recent, and the GPS sequence continues to advance. It does not initialize the drivetrain or move any motor.
-
-Until the ESP I2C firmware is implemented, `BAD_MAGIC` or an I2C error is expected.
+- [Raspberry Pi Pico C/C++ SDK setup](https://www.raspberrypi.com/documentation/microcontrollers/c_sdk.html)
+- [Official Pico I2C peripheral memory example](https://github.com/raspberrypi/pico-examples/tree/master/i2c/slave_mem_i2c)
+- [Raspberry Pi Pico pinout and hardware documentation](https://www.raspberrypi.com/documentation/microcontrollers/pico-series.html)
+- [REV Control Hub electrical specifications](https://docs.revrobotics.com/duo-control/control-system-overview/control-hub-basics)
+- [Adafruit Ultimate GPS pinout](https://learn.adafruit.com/adafruit-ultimate-gps/pinouts)

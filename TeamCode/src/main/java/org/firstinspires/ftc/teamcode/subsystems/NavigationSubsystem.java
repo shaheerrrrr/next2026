@@ -11,7 +11,7 @@ import org.firstinspires.ftc.teamcode.navigation.GeoNavigation;
 import org.firstinspires.ftc.teamcode.navigation.NavigationSnapshot;
 
 /**
- * Fuses explicitly-polled ESP GPS/target data with the Control Hub's local IMU heading.
+ * Fuses explicitly-polled GPS/target data with the Control Hub's local IMU heading.
  * This class calculates navigation geometry but never commands the drivetrain.
  */
 public class NavigationSubsystem {
@@ -22,7 +22,7 @@ public class NavigationSubsystem {
     public static final RevHubOrientationOnRobot.LogoFacingDirection HUB_LOGO_FACING =
             RevHubOrientationOnRobot.LogoFacingDirection.UP;
     public static final RevHubOrientationOnRobot.UsbFacingDirection HUB_USB_FACING =
-            RevHubOrientationOnRobot.UsbFacingDirection.FORWARD;
+            RevHubOrientationOnRobot.UsbFacingDirection.BACKWARD;
 
     public static final long MAX_GPS_AGE_MS = 1_500;
     public static final long MAX_DRIVER_LINK_AGE_MS = 2_000;
