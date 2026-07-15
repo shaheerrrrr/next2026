@@ -92,21 +92,22 @@ bearing = compass bearing(current position, target position)
 heading error = normalized(bearing - IMU compass heading)
 ```
 
-Positive heading error means the target is clockwise/right of Fable's current heading. `PointToPointController` converts this geometry into the same `drive` and `turn` inputs used by manual TeleOp.
+Positive heading error means the target is clockwise/right of Fable's current heading. `PointToPointController` produces conceptual positive-forward and positive-right commands. `BomberTeleOp` multiplies both autonomous values by `-1` at the drivetrain boundary because Fable's deployed manual drivetrain convention uses negative values for physical forward and right.
 
 The first controller behaves as follows:
 
-- Turn in place when absolute heading error is at least 25 degrees.
-- Apply proportional steering with `HEADING_KP = 0.012` power per degree.
-- Limit turn power to 0.45.
-- Use at least 0.12 turn power outside the 2-degree heading deadband.
-- Drive forward at no more than 0.35 power.
-- Slow from 0.35 toward 0.14 power inside 30 meters.
+- Always move forward while steering; navigation never intentionally turns in place.
+- Apply proportional steering with `HEADING_KP = 0.020` power per degree.
+- Limit turn power to 0.70 and at most 78% of current forward power.
+- Use at least 0.15 turn power outside the 2-degree heading deadband.
+- Drive forward at up to 0.90 power.
+- Slow from 0.90 toward 0.50 power inside 35 meters.
+- Keep both drivetrain sides moving in the same forward direction throughout a turn.
 - Never deliberately reverse.
 - Stop immediately upon entering the 10-meter arrival radius.
 - Declare arrival after three distinct GPS sequence updates remain inside that radius.
 
-All initial values are intentionally conservative and are centralized in `PointToPointController`.
+All speed and steering values are centralized in `PointToPointController` for field tuning.
 
 ## Telemetry
 
@@ -141,7 +142,7 @@ Keep target transport, navigation geometry, controller policy, and drivetrain ow
 ### Wheels Raised
 
 1. Send a target with a bearing clearly to Fable's right.
-2. Enter autonomous mode and verify positive heading error produces the same physical turn direction as pushing the manual turn stick right.
+2. Enter autonomous mode and verify Fable moves from its defined front and positive heading error produces the same physical turn direction as pushing the manual turn stick right.
 3. Repeat with a target to the left.
 4. Rotate Fable by hand and confirm turn power decreases as heading approaches target bearing.
 5. Move a drive stick and confirm the mode immediately becomes `TELEOP`.
@@ -153,7 +154,7 @@ If positive heading error turns Fable left, stop testing and invert the autonomo
 
 1. Use a target substantially farther away than the 10-meter arrival radius.
 2. Keep a clear test area and a driver ready to override.
-3. Confirm Fable first turns toward the target, then drives forward.
+3. Confirm Fable drives forward immediately and bends toward the target in a continuous arc.
 4. Watch GPS age, navigation sequence age, heading error, and generated motor commands.
 5. Test manual override, Flask Clear, GPS disconnection, and a changed target before increasing power.
 6. Approach the target and confirm the drivetrain stops while collecting three arrival confirmations.
@@ -177,9 +178,8 @@ Change one category at a time:
 
 1. Verify heading sign and north calibration.
 2. Tune `MIN_TURN_POWER` so Fable can reliably begin rotating.
-3. Tune `HEADING_KP` and `MAX_TURN_POWER` to avoid oscillation.
-4. Tune `TURN_IN_PLACE_DEGREES` before increasing forward speed.
-5. Tune drive powers and slowdown radius.
-6. Reduce the arrival radius only after recording real GPS scatter at rest and while moving.
+3. Tune `HEADING_KP`, `MAX_TURN_POWER`, and `MAX_TURN_TO_DRIVE_RATIO` to control arc sharpness without reversing the inside wheel.
+4. Tune drive powers and slowdown radius.
+5. Reduce the arrival radius only after recording real GPS scatter at rest and while moving.
 
 Do not reduce the 10-meter radius merely because one test stops accurately. Measure repeated fixes and choose a radius larger than the observed GPS uncertainty plus stopping distance.

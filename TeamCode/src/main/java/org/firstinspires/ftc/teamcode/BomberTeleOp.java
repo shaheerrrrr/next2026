@@ -16,6 +16,10 @@ public class BomberTeleOp extends LinearOpMode {
     private static final long AUTO_NAV_POLL_MS = 200;
     private static final double MANUAL_OVERRIDE_DEADBAND = 0.18;
 
+    // Manual forward/right input is negative in this deployed drivetrain convention.
+    private static final double AUTO_DRIVE_SIGN = -1.0;
+    private static final double AUTO_TURN_SIGN = 1.0;
+
     private DriveMode driveMode = DriveMode.TELEOP;
     private String modeDetail = "Driver control";
     private long activeTargetSequence = -1;
@@ -141,7 +145,9 @@ public class BomberTeleOp extends LinearOpMode {
                             drivetrain.stop();
                             setDriveMode(DriveMode.AUTO_ARRIVED, "Arrived inside 10 m radius");
                         } else {
-                            drivetrain.drive(autoOutput.drive, autoOutput.turn);
+                            drivetrain.drive(
+                                    AUTO_DRIVE_SIGN * autoOutput.drive,
+                                    AUTO_TURN_SIGN * autoOutput.turn);
                             modeDetail = autoOutput.phase;
                         }
                     }

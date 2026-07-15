@@ -1,19 +1,19 @@
 package org.firstinspires.ftc.teamcode.navigation;
 
-/** Converts point-to-point navigation geometry into conservative tank-drive commands. */
+/** Converts point-to-point navigation geometry into fast forward-arc drive commands. */
 public final class PointToPointController {
-    public static final double ARRIVAL_RADIUS_METERS = 10.0;
+    public static final double ARRIVAL_RADIUS_METERS = 3.0;
     public static final int ARRIVAL_CONFIRMATION_FIXES = 3;
 
-    public static final double MAX_DRIVE_POWER = 0.35;
-    public static final double MIN_DRIVE_POWER = 0.14;
-    public static final double SLOWDOWN_RADIUS_METERS = 30.0;
+    public static final double MAX_DRIVE_POWER = 0.90;
+    public static final double MIN_DRIVE_POWER = 0.50;
+    public static final double SLOWDOWN_RADIUS_METERS = 35.0;
 
-    public static final double HEADING_KP = 0.012;
-    public static final double MAX_TURN_POWER = 0.45;
-    public static final double MIN_TURN_POWER = 0.12;
+    public static final double HEADING_KP = 0.020;
+    public static final double MAX_TURN_POWER = 0.70;
+    public static final double MIN_TURN_POWER = 0.15;
     public static final double HEADING_DEADBAND_DEGREES = 2.0;
-    public static final double TURN_IN_PLACE_DEGREES = 25.0;
+    public static final double MAX_TURN_TO_DRIVE_RATIO = 0.78;
 
     private long lastArrivalSequence = -1;
     private int arrivalFixCount;
@@ -41,13 +41,10 @@ public final class PointToPointController {
             return Output.stopped("Inside arrival radius; confirming GPS fixes", arrivalFixCount);
         }
 
-        double turn = calculateTurn(headingError);
-        double drive = Math.abs(headingError) >= TURN_IN_PLACE_DEGREES
-                ? 0
-                : calculateDrive(distance);
+        double drive = calculateDrive(distance);
+        double turn = calculateTurn(headingError, drive);
 
-        String phase = drive == 0 ? "Turning toward target" : "Driving toward target";
-        return new Output(drive, turn, false, arrivalFixCount, phase);
+        return new Output(drive, turn, false, arrivalFixCount, "Fast forward arc toward target");
     }
 
     private void updateArrivalConfirmation(long navigationSequence, double distance) {
@@ -61,14 +58,19 @@ public final class PointToPointController {
         }
     }
 
-    private static double calculateTurn(double headingErrorDegrees) {
+    private static double calculateTurn(double headingErrorDegrees, double drivePower) {
         double absoluteError = Math.abs(headingErrorDegrees);
         if (absoluteError <= HEADING_DEADBAND_DEGREES) return 0;
 
+        // Keeping turn below forward power prevents either side from reversing. Fable steers
+        // along an arc even when the target begins behind it instead of attempting a point turn.
+        double maximumArcTurn = Math.min(
+                MAX_TURN_POWER,
+                drivePower * MAX_TURN_TO_DRIVE_RATIO);
         double magnitude = clamp(
                 absoluteError * HEADING_KP,
                 MIN_TURN_POWER,
-                MAX_TURN_POWER);
+                maximumArcTurn);
         return Math.copySign(magnitude, headingErrorDegrees);
     }
 
