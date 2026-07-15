@@ -25,14 +25,14 @@ public class NavigationSubsystem {
             RevHubOrientationOnRobot.UsbFacingDirection.BACKWARD;
 
     public static final long MAX_GPS_AGE_MS = 1_500;
-    public static final long MAX_DRIVER_LINK_AGE_MS = 2_000;
-    public static final long MAX_SEQUENCE_AGE_MS = 1_000;
+    public static final long MAX_SEQUENCE_AGE_MS = 1_500;
 
     private final FableNavigationI2cDevice esp;
     private final IMU imu;
 
     private long lastNavigationSequence = -1;
     private long lastSequenceChangeNanos;
+    private EspNavigationData latestEspData;
 
     public NavigationSubsystem(HardwareMap hardwareMap) {
         esp = hardwareMap.get(FableNavigationI2cDevice.class, ESP_DEVICE_NAME);
@@ -45,21 +45,31 @@ public class NavigationSubsystem {
     }
 
     /**
-     * Performs one I2C read and one IMU read. Future robot code should call this only while the
-     * point-to-point mode is active; there is no background polling.
+     * Reads and caches one complete navigation packet from the Pico. TeleOp calls this at 1 Hz
+     * while idle and 5 Hz during point-to-point navigation.
      */
-    public NavigationSnapshot poll() {
+    public EspNavigationData pollNavigationData() {
         long nowNanos = System.nanoTime();
-        EspNavigationData data = esp.readNavigationData();
+        latestEspData = esp.readNavigationData();
+
+        if (latestEspData.packetValid()
+                && latestEspData.navigationSequence != lastNavigationSequence) {
+            lastNavigationSequence = latestEspData.navigationSequence;
+            lastSequenceChangeNanos = nowNanos;
+        }
+
+        return latestEspData;
+    }
+
+    /** Reads the IMU and fuses it with the most recently cached Pico packet. */
+    public NavigationSnapshot snapshot() {
+        long nowNanos = System.nanoTime();
+        EspNavigationData data = latestEspData;
+        if (data == null) data = pollNavigationData();
 
         double imuYawDegrees = imu.getRobotYawPitchRollAngles().getYaw(AngleUnit.DEGREES);
         // FTC yaw is counterclockwise-positive. GPS compass bearing is clockwise-positive.
         double compassHeadingDegrees = GeoNavigation.normalize360(-imuYawDegrees);
-
-        if (data.packetValid() && data.navigationSequence != lastNavigationSequence) {
-            lastNavigationSequence = data.navigationSequence;
-            lastSequenceChangeNanos = nowNanos;
-        }
 
         long sequenceAgeMs = lastSequenceChangeNanos == 0
                 ? Long.MAX_VALUE
@@ -84,7 +94,7 @@ public class NavigationSubsystem {
                     bearingDegrees - compassHeadingDegrees);
         }
 
-        String readinessReason = readinessReason(data, sequenceAgeMs);
+        String readinessReason = readinessReason(data, sequenceAgeMs, nowNanos);
         return new NavigationSnapshot(
                 data,
                 imuYawDegrees,
@@ -97,21 +107,34 @@ public class NavigationSubsystem {
                 readinessReason.isEmpty() ? "ready" : readinessReason);
     }
 
+    /** Convenience method used by the standalone navigation data test. */
+    public NavigationSnapshot poll() {
+        pollNavigationData();
+        return snapshot();
+    }
+
     /** Call while Fable is physically pointing toward the field's defined north direction. */
     public void resetHeadingToNorth() {
         imu.resetYaw();
     }
 
-    private static String readinessReason(EspNavigationData data, long sequenceAgeMs) {
+    private static String readinessReason(
+            EspNavigationData data,
+            long sequenceAgeMs,
+            long nowNanos) {
         if (!data.packetValid()) return "I2C packet: " + data.status + " " + data.error;
         if (!data.locationValid()) return "GPS location is invalid";
         if (data.fixQuality != EspNavigationData.FixQuality.GOOD) {
             return "GPS fix is not GOOD: " + data.fixQuality;
         }
-        if (data.gpsAgeMs > MAX_GPS_AGE_MS) return "GPS data is stale";
+        long timeSinceReadMs = Math.max(
+                0,
+                (nowNanos - data.controlHubReadTimeNanos) / 1_000_000L);
+        if (data.gpsAgeMs > MAX_GPS_AGE_MS
+                || timeSinceReadMs > MAX_GPS_AGE_MS - data.gpsAgeMs) {
+            return "GPS data is stale";
+        }
         if (!data.targetValid()) return "Target is not valid";
-        if (!data.driverLinkAlive()) return "Driver ESP-NOW link is not alive";
-        if (data.driverLinkAgeMs > MAX_DRIVER_LINK_AGE_MS) return "Driver link data is stale";
         if (sequenceAgeMs > MAX_SEQUENCE_AGE_MS) return "ESP navigation sequence is not advancing";
         return "";
     }

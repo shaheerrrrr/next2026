@@ -1,7 +1,5 @@
 package org.firstinspires.ftc.teamcode.navigation;
 
-import android.os.SystemClock;
-
 import com.qualcomm.robotcore.hardware.HardwareDevice;
 import com.qualcomm.robotcore.hardware.I2cAddr;
 import com.qualcomm.robotcore.hardware.I2cDeviceSynchDevice;
@@ -26,7 +24,6 @@ public class FableNavigationI2cDevice
     public static final int PACKET_LENGTH = 56;
     public static final int PROTOCOL_VERSION = 1;
     private static final int READ_CHUNK_LENGTH = 14;
-    private static final long REGISTER_SETTLE_MS = 10;
 
     public static final int FLAG_LOCATION_VALID = 1 << 0;
     public static final int FLAG_TARGET_VALID = 1 << 1;
@@ -65,10 +62,9 @@ public class FableNavigationI2cDevice
             for (int offset = 0; offset < PACKET_LENGTH; offset += READ_CHUNK_LENGTH) {
                 int chunkLength = Math.min(READ_CHUNK_LENGTH, PACKET_LENGTH - offset);
 
-                // Keep register selection and reading as separate bus transactions. The short
-                // settling margin also makes captures and diagnostics easier to interpret.
+                // Keep register selection and reading as separate bus transactions. The Pico
+                // handles the register write synchronously and needs no artificial delay.
                 deviceClient.write8(PACKET_REGISTER + offset, I2cWaitControl.WRITTEN);
-                SystemClock.sleep(REGISTER_SETTLE_MS);
                 byte[] chunk = deviceClient.read(chunkLength);
 
                 if (chunk == null || chunk.length != chunkLength) {

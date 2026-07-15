@@ -1,6 +1,6 @@
 # Fable Navigation Sidecar
 
-This document defines Fable's GPS and target-coordinate data path. It covers data transport and navigation telemetry only. The current code does not command the drivetrain, switch modes, or perform obstacle avoidance.
+This document defines Fable's GPS and target-coordinate transport. The drivetrain mode and point-to-point controller built on this data are documented in `docs/fable-autonomous-mode.md`. Obstacle avoidance is not implemented yet.
 
 The proven LoRa USB HID tele-op path is independent and remains unchanged.
 
@@ -33,7 +33,7 @@ NavigationSubsystem / FableNavigationDataTest
 - The Pico validates magic, version, length, and CRC before publishing a snapshot. A bad or partial UART frame never replaces the last good one.
 - The Pico is an I2C peripheral at 7-bit address `0x42`. The Control Hub is the I2C controller.
 - The Control Hub owns IMU heading. Heading is not part of protocol version 1.
-- `NavigationSubsystem.poll()` is the only robot operation that reads navigation data. It calculates geometry but never drives motors.
+- `NavigationSubsystem.pollNavigationData()` reads and caches the Pico packet. `snapshot()` combines that packet with a current IMU heading without another I2C transaction.
 
 The Pico serves a valid startup packet with no GPS or target flags before the first C3 packet arrives. Therefore, a powered Pico with no C3 connection should report `I2C: OK` and `GPS location is invalid`, not `BAD_MAGIC` or `BAD_CHECKSUM`.
 
@@ -41,8 +41,8 @@ The Pico serves a valid startup packet with no GPS or target flags before the fi
 
 | Device | Source |
 | --- | --- |
-| Robot ESP32-C3 | `esp/fable_robot_nav_uart/fable_robot_nav_uart.ino` |
-| Raspberry Pi Pico WH | `pico/fable_navigation_bridge/` |
+| Robot ESP32-C3 | `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` on branch `ftc-lora` |
+| Raspberry Pi Pico WH | `fable_navigation_bridge/` on branch `ftc-lora` |
 | Control Hub test | `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/FableNavigationDataTest.java` |
 
 The driver-side ESP firmware and laptop application do not change for this bridge. Their ESP-NOW packet formats remain the deployed formats used by the robot ESP sketch.
@@ -106,7 +106,7 @@ The Pico bridge uses the official Raspberry Pi Pico C/C++ SDK, including its int
 ### Recommended: Raspberry Pi Pico VS Code extension
 
 1. Install Visual Studio Code and the official `Raspberry Pi Pico` extension.
-2. Import `pico/fable_navigation_bridge` as an existing Pico project.
+2. On branch `ftc-lora`, import `fable_navigation_bridge` as an existing Pico project.
 3. Select board `Pico W` (`pico_w`). Pico W and Pico WH use the same board target.
 4. Build the `fable_navigation_bridge` target.
 5. Hold the Pico's `BOOTSEL` button while connecting its USB cable.
@@ -129,17 +129,17 @@ After installing the Pico SDK and Arm toolchain:
 
 ```bash
 export PICO_SDK_PATH=/absolute/path/to/pico-sdk
-cmake -S pico/fable_navigation_bridge \
-  -B pico/fable_navigation_bridge/build \
+cmake -S fable_navigation_bridge \
+  -B fable_navigation_bridge/build \
   -DPICO_BOARD=pico_w
-cmake --build pico/fable_navigation_bridge/build
+cmake --build fable_navigation_bridge/build
 ```
 
-Flash `pico/fable_navigation_bridge/build/fable_navigation_bridge.uf2` with `BOOTSEL` as described above.
+Flash `fable_navigation_bridge/build/fable_navigation_bridge.uf2` with `BOOTSEL` as described above.
 
 ## Flashing the Robot ESP32-C3
 
-1. Open `esp/fable_robot_nav_uart/fable_robot_nav_uart.ino` in Arduino IDE.
+1. On branch `ftc-lora`, open `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` in Arduino IDE.
 2. Select the exact ESP32-C3 board and port previously used for the working GPS/ESP-NOW sketch.
 3. Install `TinyGPSPlus` through Library Manager if it is not already installed.
 4. Use the same ESP32 Arduino core version as the deployed working sketch.
@@ -150,7 +150,7 @@ UART0 is now dedicated to GPIO 6/7 for the Pico. GPS remains on UART1 at GPIO 4/
 
 ## Control Hub Setup
 
-No navigation protocol or OpMode changes are required for the bridge.
+The bridge remains a read-only navigation data device from the Control Hub's perspective.
 
 1. Build and install the Robot Controller app from this repository.
 2. Open the active Robot Configuration.
@@ -160,7 +160,7 @@ No navigation protocol or OpMode changes are required for the bridge.
 6. Save and activate the configuration.
 7. Run `Fable: Navigation Data Test`.
 
-The test polls once per second and never initializes or commands the drivetrain.
+The test polls once per second and never initializes or commands the drivetrain. The production `Bomber` OpMode polls at 1 Hz in TeleOp and 5 Hz while navigating.
 
 ## Bring-Up Order
 
@@ -228,7 +228,7 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, a
 GPS bearing uses compass convention: north is 0 degrees and east is 90 degrees. FTC IMU yaw is counterclockwise-positive, so robot compass heading is normalized `-yaw`.
 
 1. Point Fable forward toward the field direction defined as north.
-2. Press Y/Triangle in the test OpMode to reset IMU yaw.
+2. Press Y/Triangle during `Bomber` initialization or in the navigation test to reset IMU yaw.
 3. Confirm compass heading is near 0 degrees.
 4. Turn Fable clockwise and confirm compass heading increases toward 90 degrees.
 
