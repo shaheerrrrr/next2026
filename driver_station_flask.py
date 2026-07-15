@@ -84,6 +84,7 @@ INDEX_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LoRa Fleet Driver Station</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
     :root {
       color-scheme: dark;
@@ -492,6 +493,36 @@ INDEX_HTML = r"""<!doctype html>
       border-bottom: 1px solid var(--border);
     }
 
+    .nav-head h2 {
+      margin: 0;
+    }
+
+    .map-layer-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      background: #10161b;
+    }
+
+    .map-layer-toggle button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 780;
+      cursor: pointer;
+    }
+
+    .map-layer-toggle button.active {
+      background: var(--accent);
+      color: #06100a;
+    }
+
     .nav-mode {
       display: inline-flex;
       align-items: center;
@@ -513,8 +544,8 @@ INDEX_HTML = r"""<!doctype html>
 
     .field-map {
       position: relative;
-      height: 300px;
-      margin: 12px;
+      height: clamp(520px, 58vh, 760px);
+      margin: 14px;
       border: 1px solid #394650;
       border-radius: 8px;
       overflow: hidden;
@@ -527,6 +558,19 @@ INDEX_HTML = r"""<!doctype html>
       background-size: 12.5% 12.5%, 12.5% 12.5%, auto, auto;
     }
 
+    .leaflet-map {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: #10161b;
+    }
+
+    .leaflet-map .leaflet-control-attribution {
+      background: rgba(16, 22, 27, 0.72);
+      color: var(--muted);
+      font-size: 10px;
+    }
+
     .field-map.calibrated {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 0 24px rgba(193,95,60,0.14);
@@ -535,6 +579,7 @@ INDEX_HTML = r"""<!doctype html>
     .field-empty {
       position: absolute;
       inset: 0;
+      z-index: 3;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -552,6 +597,7 @@ INDEX_HTML = r"""<!doctype html>
       width: 100%;
       height: 100%;
       pointer-events: none;
+      z-index: 2;
     }
 
     .field-line rect {
@@ -567,6 +613,7 @@ INDEX_HTML = r"""<!doctype html>
       border: 2px solid rgba(255,255,255,0.92);
       box-shadow: 0 0 18px rgba(0,0,0,0.5);
       display: none;
+      z-index: 4;
     }
 
     .field-dot.current {
@@ -579,9 +626,9 @@ INDEX_HTML = r"""<!doctype html>
 
     .nav-details {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
-      padding: 0 12px 12px;
+      padding: 0 14px 12px;
     }
 
     .nav-detail {
@@ -601,7 +648,7 @@ INDEX_HTML = r"""<!doctype html>
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-      padding: 0 12px 12px;
+      padding: 0 14px 14px;
     }
 
     .modal-backdrop {
@@ -646,6 +693,59 @@ INDEX_HTML = r"""<!doctype html>
     .corner-grid {
       display: grid;
       gap: 12px;
+    }
+
+    .calibration-map-wrap {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .calibration-map-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      overflow: hidden;
+      min-height: 380px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .calibration-map-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .corner-picker {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .corner-pick {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-3);
+      color: var(--muted);
+      padding: 8px;
+      font-weight: 780;
+      cursor: pointer;
+    }
+
+    .corner-pick.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #06100a;
+    }
+
+    .calibration-map {
+      position: relative;
+      min-height: 300px;
+      flex: 1;
+      background: #10161b;
     }
 
     .corner-row {
@@ -698,10 +798,18 @@ INDEX_HTML = r"""<!doctype html>
       flex-wrap: wrap;
     }
 
+    @media (max-width: 900px) {
+      .calibration-map-wrap { grid-template-columns: 1fr; }
+      .corner-row { grid-template-columns: 1fr; }
+      .corner-name { padding-bottom: 0; }
+    }
+
     @media (max-width: 980px) {
       header { flex-direction: column; }
       .status-row { justify-content: flex-start; }
       main { grid-template-columns: 1fr; }
+      .nav-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .field-map { height: 460px; }
     }
 
     @media (max-width: 680px) {
@@ -712,6 +820,8 @@ INDEX_HTML = r"""<!doctype html>
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .controls-grid { grid-template-columns: 1fr; }
       .button-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .nav-details { grid-template-columns: 1fr; }
+      .field-map { height: 360px; }
       .terminal { height: 440px; }
     }
   </style>
@@ -797,37 +907,6 @@ INDEX_HTML = r"""<!doctype html>
             </div>
           </div>
 
-          <div id="fableNavPanel" class="nav-panel hidden">
-            <div class="nav-head">
-              <div>
-                <h2>Fable Navigation</h2>
-                <div class="label" id="fableNavSubtitle">Waiting for GPS telemetry...</div>
-              </div>
-              <div class="actions">
-                <button class="action" id="fableCalibrateBtn">Calibrate Field</button>
-                <div class="nav-mode" id="fableNavMode">TELE-OP</div>
-              </div>
-            </div>
-            <div class="field-map" id="fableField">
-              <svg class="field-line" viewBox="0 0 100 100" preserveAspectRatio="none">
-                <rect id="fableFieldOutline" x="5" y="5" width="90" height="90" fill="none" stroke="#c15f3c" stroke-width="0.8" stroke-dasharray="2 2" opacity="0.28"/>
-                <line id="fableTargetLine" x1="50" y1="50" x2="50" y2="50" stroke="#ffcc66" stroke-width="0.8" stroke-dasharray="2 2" opacity="0"/>
-              </svg>
-              <div class="field-empty" id="fableFieldEmpty">GPS fix required for fallback mode. Calibrate field corners to use the rectangle without a current fix.</div>
-              <div class="field-dot current" id="fableCurrentDot" title="Current position"></div>
-              <div class="field-dot target" id="fableTargetDot" title="Selected target"></div>
-            </div>
-            <div class="nav-details">
-              <div class="nav-detail"><div class="label">Current Position</div><div class="value" id="fableCurrentCoord">--</div></div>
-              <div class="nav-detail"><div class="label">Selected Target</div><div class="value" id="fableTargetCoord">Click the field</div></div>
-              <div class="nav-detail"><div class="label">GPS Quality</div><div class="value" id="fableGpsQuality">--</div></div>
-              <div class="nav-detail"><div class="label">ESP-NOW Link</div><div class="value" id="fableLinkState">--</div></div>
-            </div>
-            <div class="nav-actions">
-              <button class="action primary" id="fableSendTargetBtn" disabled>Send Target</button>
-              <button class="action" id="fableCancelAutoBtn">Cancel Auto</button>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -844,6 +923,42 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </section>
     </main>
+
+    <section id="fableNavPanel" class="nav-panel hidden">
+      <div class="nav-head">
+        <div>
+          <h2>Fable Navigation</h2>
+          <div class="label" id="fableNavSubtitle">Waiting for GPS telemetry...</div>
+        </div>
+        <div class="actions">
+          <div class="map-layer-toggle" aria-label="Map layer">
+            <button data-map-layer="street" type="button">Street</button>
+            <button data-map-layer="satellite" type="button">Satellite</button>
+          </div>
+          <button class="action" id="fableCalibrateBtn">Calibrate Field</button>
+          <div class="nav-mode" id="fableNavMode">TELE-OP</div>
+        </div>
+      </div>
+      <div class="field-map" id="fableField">
+        <div class="leaflet-map" id="fableLeafletMap"></div>
+        <svg class="field-line" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <line id="fableTargetLine" x1="50" y1="50" x2="50" y2="50" stroke="#ffcc66" stroke-width="0.8" stroke-dasharray="2 2" opacity="0"/>
+        </svg>
+        <div class="field-empty" id="fableFieldEmpty">GPS fix required for fallback mode. Calibrate field corners to use the rectangle without a current fix.</div>
+        <div class="field-dot current" id="fableCurrentDot" title="Current position"></div>
+        <div class="field-dot target" id="fableTargetDot" title="Selected target"></div>
+      </div>
+      <div class="nav-details">
+        <div class="nav-detail"><div class="label">Current Position</div><div class="value" id="fableCurrentCoord">--</div></div>
+        <div class="nav-detail"><div class="label">Selected Target</div><div class="value" id="fableTargetCoord">Click the field</div></div>
+        <div class="nav-detail"><div class="label">GPS Quality</div><div class="value" id="fableGpsQuality">--</div></div>
+        <div class="nav-detail"><div class="label">ESP-NOW Link</div><div class="value" id="fableLinkState">--</div></div>
+      </div>
+      <div class="nav-actions">
+        <button class="action primary" id="fableSendTargetBtn" disabled>Send Target</button>
+        <button class="action" id="fableCancelAutoBtn">Cancel Auto</button>
+      </div>
+    </section>
   </div>
 
   <div class="modal-backdrop hidden" id="fableCalibrationModal">
@@ -856,30 +971,48 @@ INDEX_HTML = r"""<!doctype html>
         <button class="action" id="fableCalCloseBtn">Close</button>
       </div>
       <div class="modal-body">
-        <div class="corner-grid">
-          <div class="corner-row" data-corner="nw">
-            <div class="corner-name">Northwest</div>
-            <div class="field-input"><label>Latitude</label><input id="calNwLat" inputmode="decimal" placeholder="37.4219999"></div>
-            <div class="field-input"><label>Longitude</label><input id="calNwLon" inputmode="decimal" placeholder="-122.0840575"></div>
-            <button class="action use-current" data-corner="nw">Use Current</button>
+        <div class="calibration-map-wrap">
+          <div class="calibration-map-card">
+            <div class="calibration-map-head">
+              <div class="label">Pick corners from the map</div>
+              <div class="map-layer-toggle" aria-label="Calibration map layer" style="margin-top: 10px;">
+                <button data-map-layer="street" type="button">Street</button>
+                <button data-map-layer="satellite" type="button">Satellite</button>
+              </div>
+              <div class="corner-picker">
+                <button class="corner-pick active" data-corner="nw">NW</button>
+                <button class="corner-pick" data-corner="ne">NE</button>
+                <button class="corner-pick" data-corner="se">SE</button>
+                <button class="corner-pick" data-corner="sw">SW</button>
+              </div>
+            </div>
+            <div class="calibration-map" id="fableCalibrationMap"></div>
           </div>
-          <div class="corner-row" data-corner="ne">
-            <div class="corner-name">Northeast</div>
-            <div class="field-input"><label>Latitude</label><input id="calNeLat" inputmode="decimal"></div>
-            <div class="field-input"><label>Longitude</label><input id="calNeLon" inputmode="decimal"></div>
-            <button class="action use-current" data-corner="ne">Use Current</button>
-          </div>
-          <div class="corner-row" data-corner="se">
-            <div class="corner-name">Southeast</div>
-            <div class="field-input"><label>Latitude</label><input id="calSeLat" inputmode="decimal"></div>
-            <div class="field-input"><label>Longitude</label><input id="calSeLon" inputmode="decimal"></div>
-            <button class="action use-current" data-corner="se">Use Current</button>
-          </div>
-          <div class="corner-row" data-corner="sw">
-            <div class="corner-name">Southwest</div>
-            <div class="field-input"><label>Latitude</label><input id="calSwLat" inputmode="decimal"></div>
-            <div class="field-input"><label>Longitude</label><input id="calSwLon" inputmode="decimal"></div>
-            <button class="action use-current" data-corner="sw">Use Current</button>
+          <div class="corner-grid">
+            <div class="corner-row" data-corner="nw">
+              <div class="corner-name">Northwest</div>
+              <div class="field-input"><label>Latitude</label><input id="calNwLat" inputmode="decimal" placeholder="37.4219999"></div>
+              <div class="field-input"><label>Longitude</label><input id="calNwLon" inputmode="decimal" placeholder="-122.0840575"></div>
+              <button class="action use-current" data-corner="nw">Use Current</button>
+            </div>
+            <div class="corner-row" data-corner="ne">
+              <div class="corner-name">Northeast</div>
+              <div class="field-input"><label>Latitude</label><input id="calNeLat" inputmode="decimal"></div>
+              <div class="field-input"><label>Longitude</label><input id="calNeLon" inputmode="decimal"></div>
+              <button class="action use-current" data-corner="ne">Use Current</button>
+            </div>
+            <div class="corner-row" data-corner="se">
+              <div class="corner-name">Southeast</div>
+              <div class="field-input"><label>Latitude</label><input id="calSeLat" inputmode="decimal"></div>
+              <div class="field-input"><label>Longitude</label><input id="calSeLon" inputmode="decimal"></div>
+              <button class="action use-current" data-corner="se">Use Current</button>
+            </div>
+            <div class="corner-row" data-corner="sw">
+              <div class="corner-name">Southwest</div>
+              <div class="field-input"><label>Latitude</label><input id="calSwLat" inputmode="decimal"></div>
+              <div class="field-input"><label>Longitude</label><input id="calSwLon" inputmode="decimal"></div>
+              <button class="action use-current" data-corner="sw">Use Current</button>
+            </div>
           </div>
         </div>
       </div>
@@ -893,6 +1026,7 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const ROBOTS = {
       flash: { id: 1, name: 'Flash', accent: '__ROBOT_ACCENT_FLASH__', profile: 'standard' },
@@ -904,6 +1038,24 @@ INDEX_HTML = r"""<!doctype html>
     const latestByRobot = {};
     const el = id => document.getElementById(id);
     const FABLE_FIELD_METERS = __FABLE_FIELD_METERS__;
+    const FABLE_TILE_LAYERS = {
+      street: {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        options: {
+          maxZoom: 22,
+          maxNativeZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors'
+        }
+      },
+      satellite: {
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        options: {
+          maxZoom: 22,
+          maxNativeZoom: 19,
+          attribution: 'Tiles &copy; Esri'
+        }
+      }
+    };
     let activeRobot = 'flash';
     let paused = false;
     let lastEventAt = 0;
@@ -911,6 +1063,19 @@ INDEX_HTML = r"""<!doctype html>
     let fableFieldCenter = null;
     let fableSelectedTarget = null;
     let fableFieldCalibration = null;
+    let fableMap = null;
+    let fableMapHasView = false;
+    let fableTileMode = localStorage.getItem('fableTileMode') || 'satellite';
+    let fableMapBaseLayer = null;
+    let fableCalibrationMapBaseLayer = null;
+    let fableCurrentLayer = null;
+    let fableTargetLayer = null;
+    let fableRouteLayer = null;
+    let fableFieldLayer = null;
+    let fableCalibrationMap = null;
+    let fableCalibrationLayer = null;
+    let activeCalibrationCorner = 'nw';
+    if (!FABLE_TILE_LAYERS[fableTileMode]) fableTileMode = 'satellite';
 
     function loadFableFieldCalibration() {
       try {
@@ -928,7 +1093,181 @@ INDEX_HTML = r"""<!doctype html>
       } else {
         localStorage.removeItem('fableFieldCalibration');
       }
+      fableMapHasView = false;
       updateFableNav(fableNav);
+      updateCalibrationMap();
+    }
+
+    function hasLeaflet() {
+      return typeof window.L !== 'undefined';
+    }
+
+    function activeTileLayer() {
+      return FABLE_TILE_LAYERS[fableTileMode] || FABLE_TILE_LAYERS.satellite;
+    }
+
+    function replaceTileLayer(map, currentLayer) {
+      if (!map || !hasLeaflet()) return currentLayer;
+      if (currentLayer) currentLayer.remove();
+      const layer = activeTileLayer();
+      return L.tileLayer(layer.url, layer.options).addTo(map);
+    }
+
+    function refreshTileLayerButtons() {
+      document.querySelectorAll('[data-map-layer]').forEach(button => {
+        button.classList.toggle('active', button.dataset.mapLayer === fableTileMode);
+      });
+    }
+
+    function setFableTileMode(mode) {
+      if (!FABLE_TILE_LAYERS[mode]) return;
+      fableTileMode = mode;
+      localStorage.setItem('fableTileMode', mode);
+      fableMapBaseLayer = replaceTileLayer(fableMap, fableMapBaseLayer);
+      fableCalibrationMapBaseLayer = replaceTileLayer(fableCalibrationMap, fableCalibrationMapBaseLayer);
+      refreshTileLayerButtons();
+    }
+
+    function ensureFableMap() {
+      if (fableMap || !hasLeaflet()) return fableMap;
+      fableMap = L.map('fableLeafletMap', {
+        zoomControl: true,
+        attributionControl: true
+      });
+      fableMapBaseLayer = replaceTileLayer(fableMap, fableMapBaseLayer);
+      fableMap.setView([0, 0], 2);
+      fableMap.on('click', event => {
+        fableSelectedTarget = { lat: event.latlng.lat, lon: event.latlng.lng };
+        updateFableNav(fableNav);
+      });
+      return fableMap;
+    }
+
+    function ensureCalibrationMap() {
+      if (fableCalibrationMap || !hasLeaflet()) return fableCalibrationMap;
+      fableCalibrationMap = L.map('fableCalibrationMap', {
+        zoomControl: true,
+        attributionControl: true
+      });
+      fableCalibrationMapBaseLayer = replaceTileLayer(fableCalibrationMap, fableCalibrationMapBaseLayer);
+      fableCalibrationLayer = L.layerGroup().addTo(fableCalibrationMap);
+      fableCalibrationMap.setView([0, 0], 2);
+      fableCalibrationMap.on('click', event => {
+        setCornerInputs(activeCalibrationCorner, { lat: event.latlng.lat, lon: event.latlng.lng });
+        activateCalibrationCorner(nextCalibrationCorner(activeCalibrationCorner));
+        updateCalibrationMap();
+      });
+      return fableCalibrationMap;
+    }
+
+    function latLon(point) {
+      return [point.lat, point.lon];
+    }
+
+    function fableFallbackCorners(center) {
+      const half = FABLE_FIELD_METERS / 2;
+      const latMeters = 111320;
+      const lonMeters = metersPerDegLonAt(center.lat);
+      const dLat = half / latMeters;
+      const dLon = half / lonMeters;
+      return [
+        [center.lat + dLat, center.lon - dLon],
+        [center.lat + dLat, center.lon + dLon],
+        [center.lat - dLat, center.lon + dLon],
+        [center.lat - dLat, center.lon - dLon]
+      ];
+    }
+
+    function calibrationCornersLatLngs() {
+      if (!fableFieldCalibration) return null;
+      return [
+        latLon(fableFieldCalibration.nw),
+        latLon(fableFieldCalibration.ne),
+        latLon(fableFieldCalibration.se),
+        latLon(fableFieldCalibration.sw)
+      ];
+    }
+
+    function setCircleLayer(existing, point, options) {
+      if (!fableMap || !point) {
+        if (existing) existing.remove();
+        return null;
+      }
+      if (!existing) {
+        return L.circleMarker(latLon(point), options).addTo(fableMap);
+      }
+      existing.setLatLng(latLon(point));
+      existing.setStyle(options);
+      return existing;
+    }
+
+    function updateFableLeafletMap(hasCurrent) {
+      const map = ensureFableMap();
+      if (!map) return false;
+      setTimeout(() => map.invalidateSize(), 0);
+
+      const current = hasCurrent ? { lat: fableNav.lat, lon: fableNav.lon } : null;
+      const target = fableSelectedTarget;
+      const calibratedCorners = calibrationCornersLatLngs();
+      const fallbackCorners = !calibratedCorners && current ? fableFallbackCorners(current) : null;
+      const fieldCorners = calibratedCorners || fallbackCorners;
+
+      if (fieldCorners) {
+        const style = calibratedCorners
+          ? { color: ROBOTS.fable.accent, weight: 3, opacity: 0.95, fillOpacity: 0.025 }
+          : { color: ROBOTS.fable.accent, weight: 2, opacity: 0.45, fillOpacity: 0.03, dashArray: '5 6' };
+        if (!fableFieldLayer) {
+          fableFieldLayer = L.polygon(fieldCorners, style).addTo(map);
+        } else {
+          fableFieldLayer.setLatLngs(fieldCorners);
+          fableFieldLayer.setStyle(style);
+        }
+      } else if (fableFieldLayer) {
+        fableFieldLayer.remove();
+        fableFieldLayer = null;
+      }
+
+      fableCurrentLayer = setCircleLayer(fableCurrentLayer, current, {
+        radius: 8,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: ROBOTS.fable.accent,
+        fillOpacity: 1
+      });
+      if (fableCurrentLayer) fableCurrentLayer.bindTooltip('Fable current position');
+
+      fableTargetLayer = setCircleLayer(fableTargetLayer, target, {
+        radius: 8,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: '#ffcc66',
+        fillOpacity: 1
+      });
+      if (fableTargetLayer) fableTargetLayer.bindTooltip('Selected target');
+
+      if (current && target) {
+        const points = [latLon(current), latLon(target)];
+        if (!fableRouteLayer) {
+          fableRouteLayer = L.polyline(points, { color: '#ffcc66', weight: 3, opacity: 0.9, dashArray: '6 6' }).addTo(map);
+        } else {
+          fableRouteLayer.setLatLngs(points);
+        }
+      } else if (fableRouteLayer) {
+        fableRouteLayer.remove();
+        fableRouteLayer = null;
+      }
+
+      if (!fableMapHasView) {
+        if (fieldCorners) {
+          map.fitBounds(L.latLngBounds(fieldCorners), { padding: calibratedCorners ? [12, 12] : [24, 24], maxZoom: 22 });
+          fableMapHasView = true;
+        } else if (current) {
+          map.setView(latLon(current), 20);
+          fableMapHasView = true;
+        }
+      }
+
+      return true;
     }
 
     function setAccent(robotKey) {
@@ -976,6 +1315,13 @@ INDEX_HTML = r"""<!doctype html>
       el('solControls').classList.toggle('hidden', !sol);
       el('fableNavPanel').classList.toggle('hidden', !fable);
       el('ltRow').classList.toggle('hidden', sol);
+
+      if (fable) {
+        setTimeout(() => {
+          if (fableFieldCalibration) fableMapHasView = false;
+          updateFableNav(fableNav);
+        }, 0);
+      }
 
       renderLog();
       renderLatest(latestByRobot[robotKey]);
@@ -1148,9 +1494,6 @@ INDEX_HTML = r"""<!doctype html>
       const fixLabel = fableNav.fix_quality === 2 ? 'good' : (fableNav.fix_quality === 1 ? 'weak' : 'none');
       const calibrated = Boolean(fableFieldCalibration);
       el('fableField').classList.toggle('calibrated', calibrated);
-      el('fableFieldOutline').setAttribute('opacity', calibrated ? '1' : '0.28');
-      el('fableFieldOutline').setAttribute('stroke-dasharray', calibrated ? '0' : '2 2');
-      el('fableFieldOutline').setAttribute('stroke', calibrated ? ROBOTS.fable.accent : '#c15f3c');
       el('fableNavSubtitle').textContent = calibrated
         ? 'Calibrated field corners active'
         : (hasCurrent ? `Fallback field: ${FABLE_FIELD_METERS.toFixed(1)} m around first GPS fix` : (fableNav.error || 'Waiting for GPS telemetry...'));
@@ -1166,15 +1509,28 @@ INDEX_HTML = r"""<!doctype html>
 
       const currentPoint = hasCurrent ? fableLatLonToPoint(fableNav.lat, fableNav.lon) : null;
       const targetPoint = fableSelectedTarget ? fableLatLonToPoint(fableSelectedTarget.lat, fableSelectedTarget.lon) : null;
-      placeDot('fableCurrentDot', currentPoint);
-      placeDot('fableTargetDot', targetPoint);
-      setTargetLine(currentPoint, targetPoint);
+      const leafletActive = updateFableLeafletMap(hasCurrent);
+      placeDot('fableCurrentDot', leafletActive ? null : currentPoint);
+      placeDot('fableTargetDot', leafletActive ? null : targetPoint);
+      setTargetLine(leafletActive ? null : currentPoint, leafletActive ? null : targetPoint);
       el('fableFieldEmpty').style.display = (hasCurrent || calibrated) ? 'none' : 'flex';
     }
 
     function cornerInputIds(corner) {
       const prefix = { nw: 'Nw', ne: 'Ne', se: 'Se', sw: 'Sw' }[corner];
       return { lat: `cal${prefix}Lat`, lon: `cal${prefix}Lon` };
+    }
+
+    function nextCalibrationCorner(corner) {
+      const corners = ['nw', 'ne', 'se', 'sw'];
+      return corners[(corners.indexOf(corner) + 1) % corners.length];
+    }
+
+    function activateCalibrationCorner(corner) {
+      activeCalibrationCorner = corner;
+      document.querySelectorAll('.corner-pick').forEach(button => {
+        button.classList.toggle('active', button.dataset.corner === corner);
+      });
     }
 
     function setCornerInputs(corner, point) {
@@ -1195,7 +1551,15 @@ INDEX_HTML = r"""<!doctype html>
       for (const corner of ['nw', 'ne', 'se', 'sw']) {
         setCornerInputs(corner, fableFieldCalibration ? fableFieldCalibration[corner] : null);
       }
+      activateCalibrationCorner('nw');
       el('fableCalibrationModal').classList.remove('hidden');
+      const map = ensureCalibrationMap();
+      if (map) {
+        setTimeout(() => {
+          map.invalidateSize();
+          updateCalibrationMap(true);
+        }, 0);
+      }
     }
 
     function closeFableCalibrationModal() {
@@ -1214,6 +1578,71 @@ INDEX_HTML = r"""<!doctype html>
       }
       saveFableFieldCalibration(calibration);
       closeFableCalibrationModal();
+    }
+
+    function currentCalibrationInputs() {
+      const calibration = {};
+      let complete = true;
+      for (const corner of ['nw', 'ne', 'se', 'sw']) {
+        const point = getCornerInputs(corner);
+        if (!point) {
+          complete = false;
+        } else {
+          calibration[corner] = point;
+        }
+      }
+      return { calibration, complete };
+    }
+
+    function updateCalibrationMap(fit = false) {
+      const map = ensureCalibrationMap();
+      if (!map || !fableCalibrationLayer) return;
+
+      fableCalibrationLayer.clearLayers();
+      const { calibration, complete } = currentCalibrationInputs();
+      const bounds = [];
+      const labels = { nw: 'NW', ne: 'NE', se: 'SE', sw: 'SW' };
+      for (const corner of ['nw', 'ne', 'se', 'sw']) {
+        const point = calibration[corner];
+        if (!point) continue;
+        const marker = L.circleMarker(latLon(point), {
+          radius: 7,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: corner === activeCalibrationCorner ? '#ffcc66' : ROBOTS.fable.accent,
+          fillOpacity: 1
+        }).bindTooltip(labels[corner], { permanent: true, direction: 'top', offset: [0, -8] });
+        marker.addTo(fableCalibrationLayer);
+        bounds.push(latLon(point));
+      }
+
+      if (complete) {
+        const polygon = L.polygon([
+          latLon(calibration.nw),
+          latLon(calibration.ne),
+          latLon(calibration.se),
+          latLon(calibration.sw)
+        ], { color: ROBOTS.fable.accent, weight: 3, fillOpacity: 0.08 });
+        polygon.addTo(fableCalibrationLayer);
+      }
+
+      if (fableNav.gps_valid && fableNav.lat !== null && fableNav.lon !== null) {
+        const current = { lat: fableNav.lat, lon: fableNav.lon };
+        L.circleMarker(latLon(current), {
+          radius: 6,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: '#5aa9ff',
+          fillOpacity: 1
+        }).bindTooltip('Current', { direction: 'bottom' }).addTo(fableCalibrationLayer);
+        bounds.push(latLon(current));
+      }
+
+      if (fit && bounds.length) {
+        map.fitBounds(L.latLngBounds(bounds), { padding: [24, 24], maxZoom: 21 });
+      } else if (!bounds.length) {
+        map.setView([0, 0], 2);
+      }
     }
 
     function frameLine(frame) {
@@ -1333,6 +1762,9 @@ INDEX_HTML = r"""<!doctype html>
     document.querySelectorAll('.robot-tab').forEach(tab => {
       tab.addEventListener('click', () => setActiveRobot(tab.dataset.robot));
     });
+    document.querySelectorAll('[data-map-layer]').forEach(button => {
+      button.addEventListener('click', () => setFableTileMode(button.dataset.mapLayer));
+    });
 
     window.addEventListener('keydown', event => {
       if (event.code !== 'Space' || event.repeat) return;
@@ -1365,6 +1797,18 @@ INDEX_HTML = r"""<!doctype html>
       }
       closeFableCalibrationModal();
     });
+    document.querySelectorAll('.corner-pick').forEach(button => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        activateCalibrationCorner(button.dataset.corner);
+        updateCalibrationMap();
+      });
+    });
+    for (const corner of ['nw', 'ne', 'se', 'sw']) {
+      const ids = cornerInputIds(corner);
+      el(ids.lat).addEventListener('input', () => updateCalibrationMap());
+      el(ids.lon).addEventListener('input', () => updateCalibrationMap());
+    }
     document.querySelectorAll('.use-current').forEach(button => {
       button.addEventListener('click', event => {
         event.preventDefault();
@@ -1373,10 +1817,13 @@ INDEX_HTML = r"""<!doctype html>
           return;
         }
         setCornerInputs(button.dataset.corner, { lat: fableNav.lat, lon: fableNav.lon });
+        activateCalibrationCorner(nextCalibrationCorner(button.dataset.corner));
+        updateCalibrationMap(true);
       });
     });
 
     el('fableField').addEventListener('click', event => {
+      if (fableMap) return;
       if (!fableFieldCalibration && !fableFieldCenter) return;
       const rect = el('fableField').getBoundingClientRect();
       const x = ((event.clientX - rect.left) / rect.width) * 100;
@@ -1425,6 +1872,7 @@ INDEX_HTML = r"""<!doctype html>
     }, 250);
 
     loadFableFieldCalibration();
+    refreshTileLayerButtons();
     setActiveRobot('flash', true);
     connectEvents();
   </script>
