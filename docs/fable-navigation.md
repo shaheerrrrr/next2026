@@ -66,7 +66,7 @@ python driver_station_flask.py \
   --hz 20
 ```
 
-If `--fable-nav-port` is omitted, tele-op still works and the dashboard shows Fable navigation as disconnected.
+If `--fable-nav-port` is omitted, tele-op still works and the dashboard shows Fable navigation as disconnected. If a configured ESP serial port is temporarily unavailable or disconnects, the dashboard remains running and retries the port automatically.
 
 ## Dashboard Behavior
 
@@ -81,7 +81,7 @@ When Fable is selected, the dashboard shows a navigation panel with:
 
 Use `Calibrate Field` to set the northwest, northeast, southeast, and southwest GPS coordinates. Each corner can be typed directly, picked from the map picker, or filled from Fable's current GPS coordinate when a fix is available. The dashboard saves these corners in browser localStorage and uses them to project current/target positions into the field rectangle.
 
-The map layer toggle switches between OpenStreetMap street tiles and Esri World Imagery satellite tiles. If no calibration is saved, the dashboard falls back to a faint temporary 12 m local frame around the first GPS fix so the click-to-target UI still works. If external map tiles are unavailable, the typed coordinates and current-position calibration buttons still work; only the map imagery is missing.
+The map layer toggle switches between OpenStreetMap street tiles and Esri World Imagery satellite tiles. Once the field is calibrated, the dashboard fits the map to the field with a small buffer. If no calibration is saved, the dashboard falls back to a faint temporary 12 m local frame around the first GPS fix so the click-to-target UI still works. If external map tiles are unavailable, the typed coordinates and current-position calibration buttons still work; only the map imagery is missing.
 
 When a target is sent, Fable visibly enters autonomous mode in the UI. The Fable robot selector tab keeps an `AUTO` badge even while the driver switches to Flash or Sol for tele-op.
 

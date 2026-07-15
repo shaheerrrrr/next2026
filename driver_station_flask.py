@@ -55,6 +55,8 @@ ROBOT_BY_ID = {robot["id"]: key for key, robot in ROBOTS.items()}
 
 FABLE_NAV_SERIAL_BAUD = 115200
 FABLE_NAV_DEFAULT_FIELD_METERS = 12.0
+DEVICE_RETRY_SECONDS = 1.0
+UNO_RESET_SECONDS = 2.0
 
 # Packet v3:
 # magic[2], version u8, target_robot u8, seq u16, buttons u16,
@@ -489,12 +491,17 @@ INDEX_HTML = r"""<!doctype html>
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      padding: 12px;
+      padding: 18px 20px;
       border-bottom: 1px solid var(--border);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.045), transparent),
+        rgba(16, 22, 27, 0.28);
     }
 
     .nav-head h2 {
       margin: 0;
+      font-size: 22px;
+      line-height: 1.05;
     }
 
     .map-layer-toggle {
@@ -545,7 +552,7 @@ INDEX_HTML = r"""<!doctype html>
     .field-map {
       position: relative;
       height: clamp(520px, 58vh, 760px);
-      margin: 14px;
+      margin: 16px 20px;
       border: 1px solid #394650;
       border-radius: 8px;
       overflow: hidden;
@@ -626,9 +633,9 @@ INDEX_HTML = r"""<!doctype html>
 
     .nav-details {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 10px;
-      padding: 0 14px 12px;
+      padding: 0 20px 12px;
     }
 
     .nav-detail {
@@ -642,13 +649,16 @@ INDEX_HTML = r"""<!doctype html>
     .nav-detail .value {
       font-size: 14px;
       overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: normal;
+      line-height: 1.35;
     }
 
     .nav-actions {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-      padding: 0 14px 14px;
+      padding: 0 20px 20px;
     }
 
     .modal-backdrop {
@@ -830,8 +840,8 @@ INDEX_HTML = r"""<!doctype html>
   <div class="app">
     <header>
       <div>
-        <h1>LoRa Fleet Driver Station</h1>
-        <div class="subtitle" id="subtitle">Waiting for controller frames...</div>
+        <h1>Fleet Command</h1>
+        <div class="subtitle" id="subtitle">Waiting for operator controls...</div>
       </div>
       <div class="status-row">
         <div class="pill" id="gamepadPill"><span class="dot"></span><span>Gamepad</span></div>
@@ -1259,10 +1269,10 @@ INDEX_HTML = r"""<!doctype html>
 
       if (!fableMapHasView) {
         if (fieldCorners) {
-          map.fitBounds(L.latLngBounds(fieldCorners), { padding: calibratedCorners ? [12, 12] : [24, 24], maxZoom: 22 });
+          map.fitBounds(L.latLngBounds(fieldCorners), { padding: calibratedCorners ? [72, 72] : [40, 40], maxZoom: calibratedCorners ? 19 : 18 });
           fableMapHasView = true;
         } else if (current) {
-          map.setView(latLon(current), 20);
+          map.setView(latLon(current), 18);
           fableMapHasView = true;
         }
       }
@@ -1689,7 +1699,7 @@ INDEX_HTML = r"""<!doctype html>
       el('seq').textContent = frame.seq;
       el('rate').textContent = `${frame.hz.toFixed(1)}`;
       el('sent').textContent = frame.sent_count;
-      el('subtitle').textContent = `${frame.controller_name || 'Controller'} -> ${frame.port} @ ${frame.baud} | v${frame.version}, ${frame.frame_len} bytes`;
+      el('subtitle').textContent = `${frame.controller_name || 'Controller'} connected | Long-range control online`;
 
       el('lx').textContent = `x ${frame.lx}`;
       el('ly').textContent = `y ${frame.ly}`;
@@ -2032,12 +2042,20 @@ class SharedState:
             self.fable_nav_serial = ser
 
     def send_fable_nav_line(self, line):
+        error = ""
         with self.fable_nav_serial_lock:
             if self.fable_nav_serial is None:
                 return False, "Fable navigation serial is not connected."
-            self.fable_nav_serial.write((line.rstrip() + "\n").encode("ascii"))
-            self.fable_nav_serial.flush()
-            return True, ""
+            try:
+                self.fable_nav_serial.write((line.rstrip() + "\n").encode("ascii"))
+                self.fable_nav_serial.flush()
+            except (OSError, serial.SerialException) as exc:
+                self.fable_nav_serial = None
+                error = f"Fable navigation serial write failed: {exc}"
+        if error:
+            self.update_fable_nav({"serial_ok": False, "error": error})
+            return False, error
+        return True, ""
 
     def update_fable_nav(self, updates):
         with self.lock:
@@ -2203,64 +2221,153 @@ def run_transmitter(args, shared):
     pygame.init()
     pygame.joystick.init()
 
+    joystick = None
     ser = None
-    try:
-        if pygame.joystick.get_count() == 0:
-            raise RuntimeError("No controller detected.")
+    seq = 0
+    period = 1.0 / args.hz
+    next_send = time.monotonic()
+    next_gamepad_attempt = 0.0
+    next_serial_attempt = 0.0
+    gamepad_error = "No controller detected."
+    serial_error = f"Uno serial port is unavailable: {args.port}"
+    last_status = None
 
-        joystick = pygame.joystick.Joystick(0)
-        joystick.init()
-        ser = serial.Serial(args.port, args.baud, timeout=0)
-        time.sleep(2.0)
-
+    def publish_device_status(force=False):
+        nonlocal last_status
+        issues = [issue for issue in (gamepad_error, serial_error) if issue]
+        status = (
+            joystick is not None,
+            ser is not None,
+            joystick.get_name() if joystick is not None else "",
+            " | ".join(issues),
+        )
+        if not force and status == last_status:
+            return
+        last_status = status
         shared.set_status(
-            serial_ok=True,
-            gamepad_ok=True,
-            controller_name=joystick.get_name(),
+            serial_ok=status[1],
+            gamepad_ok=status[0],
+            controller_name=status[2],
             port=args.port,
             baud=args.baud,
             hz=args.hz,
-            error="",
+            error=status[3],
         )
-        shared.publish("notice", {"message": f"Using controller: {joystick.get_name()}"})
-        shared.publish(
-            "notice",
-            {
-                "message": (
-                    f"Controller inputs: {joystick.get_numaxes()} axes, "
-                    f"{joystick.get_numbuttons()} buttons, {joystick.get_numhats()} hats"
-                )
-            },
-        )
-        shared.publish(
-            "notice",
-            {
-                "message": (
-                    "D-pad mapping: hat 0 plus buttons "
-                    f"U={args.dpad_up_button}, D={args.dpad_down_button}, "
-                    f"L={args.dpad_left_button}, R={args.dpad_right_button}"
-                )
-            },
-        )
-        shared.publish("notice", {"message": f"Serial open: {args.port} @ {args.baud}"})
+
+    def disconnect_gamepad(message):
+        nonlocal joystick, gamepad_error, next_gamepad_attempt
+        if joystick is not None:
+            try:
+                joystick.quit()
+            except pygame.error:
+                pass
+        joystick = None
+        gamepad_error = message
+        next_gamepad_attempt = time.monotonic() + DEVICE_RETRY_SECONDS
+        shared.publish("notice", {"message": message})
+        publish_device_status()
+
+    def disconnect_serial(message):
+        nonlocal ser, serial_error, next_serial_attempt
+        if ser is not None:
+            try:
+                ser.close()
+            except (OSError, serial.SerialException):
+                pass
+        ser = None
+        serial_error = message
+        next_serial_attempt = time.monotonic() + DEVICE_RETRY_SECONDS
+        shared.publish("notice", {"message": message})
+        publish_device_status()
+
+    try:
+        publish_device_status(force=True)
         shared.publish("notice", {"message": f"Protocol v{VERSION}, frame length: {FRAME_LEN} bytes"})
 
-        seq = 0
-        period = 1.0 / args.hz
-        next_send = time.monotonic()
-
         while True:
+            now = time.monotonic()
+
+            try:
+                events = pygame.event.get()
+            except pygame.error as exc:
+                events = []
+                if joystick is not None:
+                    disconnect_gamepad(f"Controller disconnected: {exc}")
+
+            if joystick is not None and any(event.type == pygame.JOYDEVICEREMOVED for event in events):
+                disconnect_gamepad("Controller disconnected. Waiting for it to reconnect.")
+
+            if joystick is None and now >= next_gamepad_attempt:
+                next_gamepad_attempt = now + DEVICE_RETRY_SECONDS
+                try:
+                    if pygame.joystick.get_count() == 0:
+                        raise RuntimeError("No controller detected.")
+                    joystick = pygame.joystick.Joystick(0)
+                    joystick.init()
+                    gamepad_error = ""
+                    shared.publish("notice", {"message": f"Using controller: {joystick.get_name()}"})
+                    shared.publish(
+                        "notice",
+                        {
+                            "message": (
+                                f"Controller inputs: {joystick.get_numaxes()} axes, "
+                                f"{joystick.get_numbuttons()} buttons, {joystick.get_numhats()} hats"
+                            )
+                        },
+                    )
+                    shared.publish(
+                        "notice",
+                        {
+                            "message": (
+                                "D-pad mapping: hat 0 plus buttons "
+                                f"U={args.dpad_up_button}, D={args.dpad_down_button}, "
+                                f"L={args.dpad_left_button}, R={args.dpad_right_button}"
+                            )
+                        },
+                    )
+                    publish_device_status()
+                except (RuntimeError, pygame.error) as exc:
+                    gamepad_error = str(exc)
+                    joystick = None
+                    publish_device_status()
+
+            if ser is None and now >= next_serial_attempt:
+                next_serial_attempt = now + DEVICE_RETRY_SECONDS
+                try:
+                    ser = serial.Serial(args.port, args.baud, timeout=0)
+                    time.sleep(UNO_RESET_SECONDS)
+                    serial_error = ""
+                    shared.publish("notice", {"message": f"Serial open: {args.port} @ {args.baud}"})
+                    publish_device_status()
+                except (OSError, ValueError, serial.SerialException) as exc:
+                    ser = None
+                    serial_error = f"Uno serial port is unavailable: {exc}"
+                    publish_device_status()
+
+            if joystick is None or ser is None:
+                next_send = time.monotonic()
+                time.sleep(0.05)
+                continue
+
             with shared.lock:
                 robot_key = shared.active_robot
             robot_id = ROBOTS[robot_key]["id"]
-            state = read_controller_state(joystick, args)
+            try:
+                state = read_controller_state(joystick, args)
+            except (OSError, pygame.error) as exc:
+                disconnect_gamepad(f"Controller disconnected: {exc}")
+                continue
 
             injected_driver1 = shared.driver1_active()
             if injected_driver1:
                 state["buttons"] |= BTN_OPTIONS | BTN_CROSS
 
             frame = build_frame(seq, robot_id, state)
-            ser.write(frame)
+            try:
+                ser.write(frame)
+            except (OSError, serial.SerialException) as exc:
+                disconnect_serial(f"Uno serial connection lost: {exc}")
+                continue
 
             payload = make_frame_payload(seq, robot_key, state, shared, injected_driver1)
             shared.record_frame(robot_key, payload)
@@ -2272,11 +2379,9 @@ def run_transmitter(args, shared):
                 time.sleep(sleep_for)
             else:
                 next_send = time.monotonic()
-
-    except Exception as exc:
-        shared.set_status(serial_ok=False, gamepad_ok=False, error=str(exc))
-        shared.publish("notice", {"message": f"Transmitter stopped: {exc}"})
     finally:
+        if joystick is not None:
+            joystick.quit()
         if ser is not None:
             ser.close()
         pygame.quit()
@@ -2329,7 +2434,7 @@ def apply_fable_nav_message(shared, message):
             shared.update_fable_nav({"serial_ok": True, "error": message.get("error", "Fable nav send failed.")})
 
 
-def run_fable_nav_serial(args, shared):
+def run_fable_nav_serial_session(args, shared):
     if not args.fable_nav_port:
         shared.update_fable_nav({"serial_ok": False, "error": "Fable nav ESP not connected. Start with --fable-nav-port to enable GPS telemetry."})
         return
@@ -2357,12 +2462,28 @@ def run_fable_nav_serial(args, shared):
             apply_fable_nav_message(shared, message)
 
     except Exception as exc:
-        shared.update_fable_nav({"serial_ok": False, "error": str(exc)})
-        shared.publish("notice", {"message": f"Fable nav serial stopped: {exc}"})
+        error = str(exc)
+        with shared.lock:
+            already_reported = not shared.fable_nav.get("serial_ok") and shared.fable_nav.get("error") == error
+        if not already_reported:
+            shared.update_fable_nav({"serial_ok": False, "error": error})
+            shared.publish("notice", {"message": f"Fable nav serial stopped: {exc}"})
     finally:
         shared.set_fable_nav_serial(None)
         if ser is not None:
-            ser.close()
+            try:
+                ser.close()
+            except (OSError, serial.SerialException):
+                pass
+
+
+def run_fable_nav_serial(args, shared):
+    if not args.fable_nav_port:
+        run_fable_nav_serial_session(args, shared)
+        return
+    while True:
+        run_fable_nav_serial_session(args, shared)
+        time.sleep(DEVICE_RETRY_SECONDS)
 
 
 def create_app(shared):

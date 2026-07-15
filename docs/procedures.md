@@ -105,6 +105,8 @@ Open:
 http://127.0.0.1:8765
 ```
 
+The dashboard starts even when the controller, Uno, or optional Fable navigation ESP is unavailable. The status indicators in the upper-right show which links are down, and the app retries configured devices automatically. Connect or reconnect the hardware without restarting the Python process; transmission resumes when both the gamepad and Uno are ready.
+
 Use the top robot selector to choose which robot receives live tele-op HID controls. Press Space in the dashboard to cycle Flash -> Fable -> Sol without clicking.
 
 ## Register the Controller in Driver Station
