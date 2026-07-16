@@ -57,6 +57,9 @@ FABLE_NAV_SERIAL_BAUD = 115200
 FABLE_NAV_DEFAULT_FIELD_METERS = 12.0
 DEVICE_RETRY_SECONDS = 1.0
 UNO_RESET_SECONDS = 2.0
+FABLE_OVERRIDE_STICK_THRESHOLD = 80
+FABLE_OVERRIDE_TRIGGER_THRESHOLD = 50
+FABLE_CLEAR_RETRY_SECONDS = 0.5
 
 # Packet v3:
 # magic[2], version u8, target_robot u8, seq u16, buttons u16,
@@ -1511,7 +1514,9 @@ INDEX_HTML = r"""<!doctype html>
       el('fableGpsQuality').textContent = `${fixLabel}, sats ${fableNav.satellites || 0}, HDOP ${fableNav.hdop ?? '--'}`;
       el('fableLinkState').textContent = fableNav.link_alive ? `driver heartbeat alive, age ${fableNav.command_age_ms ?? '--'} ms` : 'telemetry received, waiting for driver heartbeat';
 
-      if (!fableSelectedTarget && fableNav.target_valid && fableNav.target_lat !== null && fableNav.target_lon !== null) {
+      if (fableNav.clear_pending) {
+        fableSelectedTarget = null;
+      } else if (!fableSelectedTarget && fableNav.target_valid && fableNav.target_lat !== null && fableNav.target_lon !== null) {
         fableSelectedTarget = { lat: fableNav.target_lat, lon: fableNav.target_lon };
       }
       el('fableTargetCoord').textContent = fableSelectedTarget ? formatCoord(fableSelectedTarget.lat, fableSelectedTarget.lon) : 'Click the field';
@@ -1930,6 +1935,8 @@ class SharedState:
             "error": "",
             "mode": "teleop",
             "target_pending": False,
+            "clear_pending": False,
+            "clear_sent": False,
             "last_update_ms": 0,
             "nav_seq": 0,
             "target_seq": 0,
@@ -2068,6 +2075,37 @@ class SharedState:
         updates["mode"] = mode
         self.update_fable_nav(updates)
 
+    def begin_fable_teleop_override(self):
+        with self.lock:
+            if self.fable_nav.get("mode") != "autonomous":
+                return False
+        self.set_fable_nav_mode(
+            "teleop",
+            clear_pending=True,
+            clear_sent=False,
+            target_pending=False,
+            target_valid=False,
+            selected_lat=None,
+            selected_lon=None,
+            target_lat=None,
+            target_lon=None,
+            error="",
+        )
+        self.publish("notice", {"message": "Fable autonomous mode canceled by tele-op input."})
+        return True
+
+    def retry_fable_clear(self):
+        with self.lock:
+            if not self.fable_nav.get("clear_pending"):
+                return True
+            previous_error = self.fable_nav.get("error", "")
+        ok, error = self.send_fable_nav_line("CLEAR")
+        if ok:
+            self.update_fable_nav({"clear_sent": True, "error": ""})
+        elif error != previous_error:
+            self.update_fable_nav({"error": error})
+        return ok
+
 
 def apply_deadband(value, deadband=0.06):
     if abs(value) < deadband:
@@ -2097,6 +2135,19 @@ def stick_to_i16(value):
 def trigger_to_u16(value):
     normalized = (clamp(value, -1.0, 1.0) + 1.0) / 2.0
     return int(round(normalized * 1000))
+
+
+def fable_teleop_input_active(state):
+    sticks_active = any(
+        abs(state[axis]) >= FABLE_OVERRIDE_STICK_THRESHOLD
+        for axis in ("lx", "ly", "rx", "ry")
+    )
+    triggers_active = (
+        state["lt"] >= FABLE_OVERRIDE_TRIGGER_THRESHOLD
+        or state["rt"] >= FABLE_OVERRIDE_TRIGGER_THRESHOLD
+    )
+    fable_buttons = BTN_CROSS | BTN_CIRCLE | BTN_SQUARE | BTN_TRIANGLE | BTN_L1 | BTN_R1
+    return sticks_active or triggers_active or bool(state["buttons"] & fable_buttons)
 
 
 def checksum(payload):
@@ -2228,6 +2279,7 @@ def run_transmitter(args, shared):
     next_send = time.monotonic()
     next_gamepad_attempt = 0.0
     next_serial_attempt = 0.0
+    next_fable_clear_attempt = 0.0
     gamepad_error = "No controller detected."
     serial_error = f"Uno serial port is unavailable: {args.port}"
     last_status = None
@@ -2344,6 +2396,13 @@ def run_transmitter(args, shared):
                     serial_error = f"Uno serial port is unavailable: {exc}"
                     publish_device_status()
 
+            if now >= next_fable_clear_attempt:
+                with shared.lock:
+                    clear_pending = shared.fable_nav.get("clear_pending", False)
+                if clear_pending:
+                    shared.retry_fable_clear()
+                    next_fable_clear_attempt = now + FABLE_CLEAR_RETRY_SECONDS
+
             if joystick is None or ser is None:
                 next_send = time.monotonic()
                 time.sleep(0.05)
@@ -2357,6 +2416,11 @@ def run_transmitter(args, shared):
             except (OSError, pygame.error) as exc:
                 disconnect_gamepad(f"Controller disconnected: {exc}")
                 continue
+
+            if robot_key == "fable" and fable_teleop_input_active(state):
+                if shared.begin_fable_teleop_override():
+                    shared.retry_fable_clear()
+                    next_fable_clear_attempt = time.monotonic() + FABLE_CLEAR_RETRY_SECONDS
 
             injected_driver1 = shared.driver1_active()
             if injected_driver1:
@@ -2422,7 +2486,14 @@ def apply_fable_nav_message(shared, message):
         }
         with shared.lock:
             current_mode = shared.fable_nav.get("mode")
-        if updates["target_valid"] and current_mode == "teleop":
+            clear_pending = shared.fable_nav.get("clear_pending", False)
+            clear_sent = shared.fable_nav.get("clear_sent", False)
+        if clear_pending:
+            updates["mode"] = "teleop"
+            if clear_sent and not updates["target_valid"]:
+                updates["clear_pending"] = False
+                updates["clear_sent"] = False
+        elif updates["target_valid"] and current_mode == "teleop":
             updates["mode"] = "autonomous"
         shared.update_fable_nav(updates)
         return
@@ -2526,6 +2597,8 @@ def create_app(shared):
 
         shared.set_fable_nav_mode(
             "autonomous",
+            clear_pending=False,
+            clear_sent=False,
             selected_lat=lat,
             selected_lon=lon,
             target_lat=lat,
@@ -2545,6 +2618,8 @@ def create_app(shared):
 
         shared.set_fable_nav_mode(
             "teleop",
+            clear_pending=True,
+            clear_sent=True,
             target_pending=False,
             target_valid=False,
             selected_lat=None,
