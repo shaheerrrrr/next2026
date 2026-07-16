@@ -63,7 +63,7 @@ public class BomberTeleOp extends LinearOpMode {
                 lastY = y;
 
                 snapshot = navigation.snapshot();
-                showTelemetry(snapshot, autoOutput, true);
+                showTelemetry(snapshot, autoOutput, intake, true);
                 sleep(20);
             }
 
@@ -175,7 +175,7 @@ public class BomberTeleOp extends LinearOpMode {
                         (gamepad1.right_bumper ? 1 : 0)
                                 - (gamepad1.left_bumper ? 1 : 0));
 
-                showTelemetry(snapshot, autoOutput, false);
+                showTelemetry(snapshot, autoOutput, intake, false);
             }
         } finally {
             drivetrain.stop();
@@ -199,6 +199,7 @@ public class BomberTeleOp extends LinearOpMode {
     private void showTelemetry(
             NavigationSnapshot snapshot,
             PointToPointController.Output autoOutput,
+            Intake intake,
             boolean initializing) {
         telemetry.addData("Drive mode", driveMode);
         telemetry.addData("Mode detail", modeDetail);
@@ -252,6 +253,17 @@ public class BomberTeleOp extends LinearOpMode {
                 "alive=%s commandAge=%dms",
                 snapshot.esp.driverLinkAlive(),
                 snapshot.esp.driverLinkAgeMs);
+        telemetry.addData(
+                "Intake lift",
+                "%s bottom L=%s R=%s position L=%.0f%% R=%.0f%%",
+                intake.getStateName(),
+                intake.isLeftBottomPressed(),
+                intake.isRightBottomPressed(),
+                intake.getLeftPositionEstimate() * 100,
+                intake.getRightPositionEstimate() * 100);
+        telemetry.addData(
+                "Intake fault",
+                intake.hasFault() ? intake.getFault() : "none");
         if (initializing) {
             telemetry.addLine("Point Fable toward field north and press Triangle/Y, then START.");
         } else {
