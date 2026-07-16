@@ -7,8 +7,8 @@ import org.firstinspires.ftc.teamcode.subsystems.CandyCane;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 
-@TeleOp(name = "Bomber", group = "TeleOp")
-public class BomberTeleOp extends LinearOpMode {
+@TeleOp(name = "Flash", group = "TeleOp")
+public class FlashTeleOp extends LinearOpMode {
 
     @Override
     public void runOpMode() {
