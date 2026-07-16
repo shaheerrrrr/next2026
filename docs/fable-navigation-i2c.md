@@ -23,7 +23,7 @@ REV Control Hub
   |-- custom FTC hardware driver
   |-- integrated IMU heading
   v
-NavigationSubsystem / FableNavigationDataTest
+NavigationSubsystem / FableTeleOp
 ```
 
 ### Data ownership
@@ -43,7 +43,7 @@ The Pico serves a valid startup packet with no GPS or target flags before the fi
 | --- | --- |
 | Robot ESP32-C3 | `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` on branch `ftc-lora` |
 | Raspberry Pi Pico WH | `fable_navigation_bridge/` on branch `ftc-lora` |
-| Control Hub test | `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/FableNavigationDataTest.java` |
+| Control Hub integration | `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/FableTeleOp.java` |
 
 The driver-side ESP firmware and laptop application do not change for this bridge. Their ESP-NOW packet formats remain the deployed formats used by the robot ESP sketch.
 
@@ -158,15 +158,15 @@ The bridge remains a read-only navigation data device from the Control Hub's per
 4. Name it exactly `FableNav`.
 5. Confirm the integrated IMU is named `imu`.
 6. Save and activate the configuration.
-7. Run `Fable: Navigation Data Test`.
+7. Initialize the `Fable` OpMode and inspect its navigation telemetry.
 
-The test polls once per second and never initializes or commands the drivetrain. The production `Bomber` OpMode polls at 1 Hz in TeleOp and 5 Hz while navigating.
+The `Fable` OpMode polls at 1 Hz in TeleOp and 5 Hz while navigating.
 
 ## Bring-Up Order
 
 Test one boundary at a time:
 
-1. Flash and USB-power only the Pico. Connect it to the Hub I2C port and run the test OpMode. Expect `I2C: OK` and invalid GPS.
+1. Flash and USB-power only the Pico. Connect it to the Hub I2C port and initialize `Fable`. Expect packet status `OK` and invalid GPS.
 2. Connect C3 ground and UART to the Pico, then power the C3. Confirm Pico USB serial `uart_ok` increases and `uart_bad` stays zero.
 3. Connect the GPS. Indoors, packet status should remain `OK`; only GPS validity may remain false.
 4. Move outdoors with a clear sky view. Confirm sequence, coordinates, satellite count, and GPS age update.
@@ -228,7 +228,7 @@ CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, a
 GPS bearing uses compass convention: north is 0 degrees and east is 90 degrees. FTC IMU yaw is counterclockwise-positive, so robot compass heading is normalized `-yaw`.
 
 1. Point Fable forward toward the field direction defined as north.
-2. Press Y/Triangle during `Bomber` initialization or in the navigation test to reset IMU yaw.
+2. Press Y/Triangle during `Fable` initialization to reset IMU yaw.
 3. Confirm compass heading is near 0 degrees.
 4. Turn Fable clockwise and confirm compass heading increases toward 90 degrees.
 

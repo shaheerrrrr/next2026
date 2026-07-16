@@ -1,6 +1,6 @@
 # Fable Point-to-Point Autonomous Mode
 
-This guide describes the first drivetrain implementation that switches between normal LoRa HID TeleOp and GPS/IMU point-to-point navigation inside the `Bomber` OpMode.
+This guide describes the drivetrain implementation that switches between normal LoRa HID TeleOp and GPS/IMU point-to-point navigation inside the `Fable` OpMode.
 
 Selecting a target never starts the motors. The driver explicitly enables autonomous navigation with the gamepad and can immediately take control back over the existing LoRa HID path.
 
@@ -8,7 +8,7 @@ Obstacle avoidance is not part of this version.
 
 ## System Behavior
 
-The `Bomber` OpMode always starts in `TELEOP`. It does not switch to a separate FTC autonomous OpMode.
+The `Fable` OpMode always starts in `TELEOP`. It does not switch to a separate FTC autonomous OpMode.
 
 ```text
 TELEOP
@@ -43,7 +43,7 @@ Cross/A latches autonomous mode; it does not need to remain held. A transient lo
 
 1. Power the Control Hub, Pico, robot ESP32-C3, GPS, phone, and existing LoRa HID receiver.
 2. Place Fable outdoors with a clear view of the sky.
-3. Select and initialize `Bomber`, but do not press START yet.
+3. Select and initialize `Fable`, but do not press START yet.
 4. Point Fable's forward direction toward the field direction defined as north.
 5. Press Triangle/Y once. Confirm the telemetry log says `IMU heading zeroed to field north` and heading is close to 0 degrees.
 6. Confirm GPS fix is `GOOD`, the packet is `OK`, and the navigation sequence advances.
@@ -92,7 +92,7 @@ bearing = compass bearing(current position, target position)
 heading error = normalized(bearing - IMU compass heading)
 ```
 
-Positive heading error means the target is clockwise/right of Fable's current heading. `PointToPointController` produces conceptual positive-forward and positive-right commands. `BomberTeleOp` multiplies both autonomous values by `-1` at the drivetrain boundary because Fable's deployed manual drivetrain convention uses negative values for physical forward and right.
+Positive heading error means the target is clockwise/right of Fable's current heading. `PointToPointController` produces conceptual positive-forward and positive-right commands. `FableTeleOp` applies the deployed drivetrain sign conventions at the drivetrain boundary.
 
 The first controller behaves as follows:
 
@@ -129,7 +129,7 @@ Mode transitions and important events are also added to the scrolling telemetry 
 
 | File | Responsibility |
 | --- | --- |
-| `BomberTeleOp.java` | Mode ownership, controls, polling schedule, motor safety, and telemetry |
+| `FableTeleOp.java` | Mode ownership, controls, polling schedule, motor safety, and telemetry |
 | `NavigationSubsystem.java` | Cached Pico reads, IMU heading, geographic geometry, and readiness |
 | `PointToPointController.java` | Pure distance/heading-to-drive calculation and arrival confirmation |
 | `FableNavigationI2cDevice.java` | Four-chunk `FNAV` register transport and packet validation |

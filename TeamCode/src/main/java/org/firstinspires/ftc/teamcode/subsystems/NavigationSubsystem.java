@@ -107,12 +107,6 @@ public class NavigationSubsystem {
                 readinessReason.isEmpty() ? "ready" : readinessReason);
     }
 
-    /** Convenience method used by the standalone navigation data test. */
-    public NavigationSnapshot poll() {
-        pollNavigationData();
-        return snapshot();
-    }
-
     /** Call while Fable is physically pointing toward the field's defined north direction. */
     public void resetHeadingToNorth() {
         imu.resetYaw();

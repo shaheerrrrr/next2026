@@ -10,8 +10,8 @@ import org.firstinspires.ftc.teamcode.subsystems.NavigationSubsystem;
 import org.firstinspires.ftc.teamcode.navigation.NavigationSnapshot;
 import org.firstinspires.ftc.teamcode.navigation.PointToPointController;
 
-@TeleOp(name = "Bomber", group = "TeleOp")
-public class BomberTeleOp extends LinearOpMode {
+@TeleOp(name = "Fable", group = "TeleOp")
+public class FableTeleOp extends LinearOpMode {
     private static final long TELEOP_NAV_POLL_MS = 1000;
     private static final long AUTO_NAV_POLL_MS = 200;
     private static final double MANUAL_OVERRIDE_DEADBAND = 0.18;

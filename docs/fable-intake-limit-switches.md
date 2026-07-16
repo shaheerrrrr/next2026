@@ -105,7 +105,7 @@ The lift stops and reports a fault if:
 
 During a deployment fault, the intake motor and both lift servos stop. Releasing the bumper commands a timed retraction based on each side's estimated travel. Starting another deployment clears the previous fault message.
 
-`Bomber` telemetry reports:
+`Fable` telemetry reports:
 
 - Intake state
 - Raw left and right switch state
@@ -126,7 +126,7 @@ Possible states are:
 
 Test with the robot supported and hands clear:
 
-1. Select `Bomber`, but leave it in INIT.
+1. Select `Fable`, but leave it in INIT.
 2. Before moving anything, press each switch by hand and verify the matching `Intake lift` telemetry value changes to `true`.
 3. Confirm pressing the left physical switch changes only `left`.
 4. Confirm pressing the right physical switch changes only `right`.
