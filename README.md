@@ -11,6 +11,7 @@ The project is not intended for official FTC competition use. FTC legality is no
 - [Protocol Reference](docs/protocol.md): v2/v3 controller frames, checksum, button bits, and HID mapping.
 - [Multi-Robot Control](docs/multi-robot.md): v3 addressed tele-op stack for Flash, Fable, and Sol.
 - [Fable Navigation Link](docs/fable-navigation.md): ESP32-C3 GPS/I2C/ESP-NOW side channel for Fable.
+- [Driver Navigation LED](docs/driver-navigation-led.md): M5Stamp C3 ambient link and packet activity color guide.
 - [Troubleshooting](docs/troubleshooting.md): known symptoms and likely causes.
 
 ## Main Code

@@ -857,7 +857,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="robot-switch" id="robotSwitch">
       <div class="switch-glider" id="switchGlider"></div>
       <button class="robot-tab active" data-robot="flash"><span class="tab-name">Flash</span><span class="tab-role">tele-op</span></button>
-      <button class="robot-tab" data-robot="fable"><span class="tab-name">Fable</span><span class="tab-role">tele-op + future auto</span></button>
+      <button class="robot-tab" data-robot="fable"><span class="tab-name">Fable</span><span class="tab-role">tele-op + gps auto</span></button>
       <button class="robot-tab" data-robot="sol"><span class="tab-name">Sol</span><span class="tab-role">turret / shooter</span></button>
     </div>
 

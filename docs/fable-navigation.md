@@ -48,6 +48,7 @@ The driver-side sketch:
 - Prints telemetry to USB serial as JSON lines.
 - Accepts `TARGET <lat_e7> <lon_e7>` and `CLEAR` commands from Flask.
 - Sends an ESP-NOW heartbeat every 500 ms so the robot-side `driver link alive` I2C flag can become true even before a target command is sent.
+- Uses the M5Stamp C3 onboard RGB LED for ambient link health and packet activity. See [Driver Navigation LED](driver-navigation-led.md) for the color guide.
 
 The Pico bridge:
 
@@ -93,3 +94,4 @@ Install these for the ESP32-C3 sketches:
 
 - ESP32 Arduino core
 - TinyGPSPlus
+- FastLED (driver-side M5Stamp C3 status LED)
