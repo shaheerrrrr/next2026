@@ -38,7 +38,7 @@ ROBOTS = {
     "fable": {
         "id": ROBOT_FABLE,
         "name": "Fable",
-        "role": "Tele-op now, GPS autonomy later",
+        "role": "Tele-op and GPS autonomy",
         "accent": ROBOT_ACCENTS["fable"],
         "profile": "standard",
     },
