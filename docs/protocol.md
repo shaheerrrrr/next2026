@@ -130,9 +130,9 @@ D-pad button fallbacks can be changed with:
 
 Triggers are normalized from the usual DS4 axis range `-1.0..1.0` into `0..1000`.
 
-## Legacy Feather HID Mapping
+## Feather HID Mapping
 
-The Feather exposes a custom TinyUSB gamepad report:
+The robot-side Feather exposes this custom gamepad report shape:
 
 ```cpp
 typedef struct __attribute__((packed)) {
@@ -179,3 +179,5 @@ All robots receive every LoRa packet. A robot only applies packets whose `target
 When a packet targets another robot, the Feather emits neutral HID reports so the connected Android phone keeps seeing a controller with all controls released.
 
 Flash and Fable preserve the deployed button/axis HID mappings from the original Feather sketch. Sol uses the same stick axes, maps right trigger to Accelerator, maps Square/X to the tested X-button output, and maps the protocol D-pad bits to a HID hat switch.
+
+Flash and Fable provide this report through TinyUSB on their Feather M0 boards. Sol provides the same usages and payload fields through the ATmega32u4 AVR core's native pluggable HID interface. Sol's descriptor uses report ID `1`; that transport prefix does not change the gamepad fields seen by Android.

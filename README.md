@@ -26,6 +26,6 @@ The project is not intended for official FTC competition use. FTC legality is no
 - [driverstation/driverstation.ino](driverstation/driverstation.ino): driver-side Uno bridge for v3 addressed packets.
 - [flash/flash.ino](flash/flash.ino): Flash Feather receiver, robot id `1`.
 - [fable/fable.ino](fable/fable.ino): Fable Feather receiver, robot id `2`.
-- [sol/sol.ino](sol/sol.ino): Sol Feather receiver, robot id `3`.
+- [sol/sol.ino](sol/sol.ino): Sol Feather 32u4 RFM95 receiver and native USB HID gamepad, robot id `3`.
 - [fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino](fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino): Fable robot-side GPS/I2C/ESP-NOW firmware.
 - [fable_driver_nav_esp32c3/fable_driver_nav_esp32c3.ino](fable_driver_nav_esp32c3/fable_driver_nav_esp32c3.ino): driver-side ESP-NOW/USB serial bridge for Fable navigation.

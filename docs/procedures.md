@@ -77,7 +77,9 @@ For Flash/Fable/Sol control, flash:
 - [driverstation/driverstation.ino](../driverstation/driverstation.ino) to the driver-side Uno.
 - [flash/flash.ino](../flash/flash.ino) to Flash's Feather.
 - [fable/fable.ino](../fable/fable.ino) to Fable's Feather.
-- [sol/sol.ino](../sol/sol.ino) to Sol's Feather.
+- [sol/sol.ino](../sol/sol.ino) to Sol's Adafruit Feather 32u4 RFM95. Select `Adafruit Feather 32u4` in the Arduino IDE.
+
+Sol's sketch uses the AVR core's built-in `HID` library and the board's integrated RFM95 wiring (`CS 8`, `RST 4`, `IRQ 7`). It does not use Adafruit TinyUSB. Install RadioHead as usual; no additional gamepad library is required.
 
 Install Python dependencies:
 

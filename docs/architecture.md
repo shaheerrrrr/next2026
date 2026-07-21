@@ -13,7 +13,7 @@ PS4/DS4 controller
   -> Arduino Uno
   -> RFM95W LoRa transmitter
   -> LoRa radio link
-  -> Feather M0 RFM9x receiver
+  -> Robot-side Feather RFM9x receiver
   -> USB HID gamepad
   -> Android FTC Driver Station app
   -> REV Control Hub
@@ -44,11 +44,12 @@ The robot side contains:
 
 - REV Control Hub
 - Android phone running the FTC Driver Station app
-- Adafruit Feather M0 RFM9x connected to the phone with USB OTG
+- Adafruit Feather M0 RFM9x connected to the phone with USB OTG on Flash and Fable
+- Adafruit Feather 32u4 RFM95 connected to the phone with USB OTG on Sol
 
 The Android phone still connects to the REV Control Hub over the normal local Wi-Fi path. The Feather acts only as a USB HID gamepad for the Driver Station phone.
 
-The Feather receives LoRa packets, validates the frame, decodes the controller state, and sends a TinyUSB HID gamepad report to Android. The Driver Station app sees the Feather as a controller, so robot code can read normal fields like:
+The Feather receives LoRa packets, validates the frame, decodes the controller state, and sends a USB HID gamepad report to Android. Flash and Fable use TinyUSB on Feather M0 boards; Sol uses the ATmega32u4's native USB HID support. The Driver Station app sees each Feather as a controller, so robot code can read normal fields like:
 
 ```java
 gamepad1.left_stick_x
@@ -75,7 +76,7 @@ Most controller feature changes should not require Uno changes as long as the fr
 
 ## HID Bridge
 
-The Feather is where Android/FTC gamepad behavior is defined. It uses a custom TinyUSB HID descriptor instead of TinyUSB's stock gamepad descriptor.
+The Feather is where Android/FTC gamepad behavior is defined. The sketches use a custom gamepad HID descriptor rather than a stock generic descriptor. Flash and Fable publish it through TinyUSB; Sol publishes the equivalent descriptor through the ATmega32u4 AVR HID core.
 
 The descriptor exposes:
 
@@ -98,4 +99,3 @@ When stale:
 - LED turns off.
 
 This prevents a lost radio link from leaving the robot driving on the last command.
-

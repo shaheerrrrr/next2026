@@ -8,7 +8,7 @@ The multi-robot stack lets one Mac driver station broadcast controller frames to
 | --- | --- | ---: | --- |
 | Flash | Existing tele-op robot | `1` | [flash/flash.ino](../flash/flash.ino) |
 | Fable | Tele-op robot, future GPS autonomy | `2` | [fable/fable.ino](../fable/fable.ino) |
-| Sol | Turret/shooter robot | `3` | [sol/sol.ino](../sol/sol.ino) |
+| Sol | Turret/shooter robot, Feather 32u4 RFM95 | `3` | [sol/sol.ino](../sol/sol.ino) |
 
 ## Data Flow
 

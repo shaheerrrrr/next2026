@@ -1,6 +1,6 @@
 #include <SPI.h>
 #include <RH_RF95.h>
-#include "Adafruit_TinyUSB.h"
+#include <HID.h>
 
 #define ROBOT_ID 3
 #define ROBOT_NAME "Sol"
@@ -8,7 +8,7 @@
 
 #define RFM95_CS 8
 #define RFM95_RST 4
-#define RFM95_INT 3
+#define RFM95_INT 7
 
 #define RF95_FREQ 915.0
 #define FRAME_LEN 21
@@ -25,14 +25,16 @@
 
 #define STALE_MS 250
 #define HID_SEND_INTERVAL_MS 20
+#define HID_REPORT_ID 1
 #define HAT_NEUTRAL 8
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-uint8_t const desc_hid_report[] = {
+static const uint8_t desc_hid_report[] PROGMEM = {
   0x05, 0x01,
   0x09, 0x05,
   0xA1, 0x01,
+  0x85, HID_REPORT_ID,
 
   0x05, 0x09,
   0x19, 0x01,
@@ -91,7 +93,21 @@ typedef struct __attribute__((packed)) {
   uint8_t hat;
 } lora_gamepad_report_t;
 
-Adafruit_USBD_HID usb_hid;
+class SolGamepadHID {
+ public:
+  SolGamepadHID() : descriptorNode(desc_hid_report, sizeof(desc_hid_report)) {
+    HID().AppendDescriptor(&descriptorNode);
+  }
+
+  bool sendReport(const lora_gamepad_report_t &report) {
+    return HID().SendReport(HID_REPORT_ID, &report, sizeof(report)) >= 0;
+  }
+
+ private:
+  HIDSubDescriptor descriptorNode;
+};
+
+SolGamepadHID usb_hid;
 lora_gamepad_report_t gp;
 
 unsigned long lastFrameMs = 0;
@@ -233,19 +249,7 @@ void setup() {
   pinMode(RFM95_RST, OUTPUT);
   digitalWrite(RFM95_RST, HIGH);
 
-  if (!TinyUSBDevice.isInitialized()) {
-    TinyUSBDevice.begin(0);
-  }
-
-  usb_hid.setPollInterval(2);
-  usb_hid.setReportDescriptor(desc_hid_report, sizeof(desc_hid_report));
-  usb_hid.begin();
-
-  if (TinyUSBDevice.mounted()) {
-    TinyUSBDevice.detach();
-    delay(10);
-    TinyUSBDevice.attach();
-  }
+  HID().begin();
 
   resetRadio();
 
@@ -268,10 +272,6 @@ void setup() {
 }
 
 void loop() {
-#ifdef TINYUSB_NEED_POLLING_TASK
-  TinyUSBDevice.task();
-#endif
-
   if (rf95.available()) {
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
     uint8_t len = sizeof(buf);
@@ -305,12 +305,9 @@ void loop() {
     digitalWrite(LED, LOW);
   }
 
-  if (TinyUSBDevice.mounted() && usb_hid.ready()) {
-    if (millis() - lastHidSendMs >= HID_SEND_INTERVAL_MS) {
-      updateGamepadReport();
-      usb_hid.sendReport(0, &gp, sizeof(gp));
-      lastHidSendMs = millis();
-    }
+  if (millis() - lastHidSendMs >= HID_SEND_INTERVAL_MS) {
+    updateGamepadReport();
+    usb_hid.sendReport(gp);
+    lastHidSendMs = millis();
   }
 }
-
