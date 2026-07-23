@@ -15,14 +15,16 @@ TELEOP
   | Cross/A with valid navigation data
   v
 AUTO_NAVIGATING
-  |-- arrival confirmed ----------------> AUTO_ARRIVED
+  |-- arrival confirmed ----------------> GOONING
   |-- Circle/B or drive-stick movement -> TELEOP
   |-- invalid/stale GPS or target ------> TELEOP
   |-- target changes -------------------> TELEOP (re-arm required)
 
-AUTO_ARRIVED
-  |-- drive-stick movement or Circle/B -> TELEOP
-  |-- target changes or clears ---------> TELEOP
+TELEOP or AUTO_NAVIGATING
+  |-- Square/X --------------------------> GOONING
+
+GOONING
+  |-- any non-Square driver input ------> TELEOP
 ```
 
 Intake and candy-cane controls remain active in every drivetrain mode.
@@ -33,8 +35,10 @@ Intake and candy-cane controls remain active in every drivetrain mode.
 | --- | --- |
 | Triangle/Y during INIT | Zero IMU yaw while Fable points toward field north |
 | Cross/A rising edge | Enter autonomous navigation if all required data is ready |
+| Square/X rising edge | Start gooning, beginning in the forward direction |
 | Circle/B | Cancel autonomous navigation and stop the drivetrain |
 | Left drive stick or right turn stick | Immediate manual override above a 0.18 deadband |
+| Any non-Square input while gooning | Stop gooning and return to `TELEOP` |
 | Flask target Clear | Invalidates the target and stops autonomous navigation |
 
 Cross/A latches autonomous mode; it does not need to remain held. A transient loss of LoRa HID therefore does not cancel autonomous motion. Once LoRa returns, Circle/B or either drive stick can override it.
@@ -52,9 +56,25 @@ Cross/A latches autonomous mode; it does not need to remain held. A transient lo
 9. Confirm Driver Station telemetry shows the expected target and a plausible distance and bearing.
 10. Press Cross/A once to begin navigation.
 11. Keep the LoRa controls available. Move a drive stick or press Circle/B to take control back immediately.
-12. When Fable reaches the arrival region, it stops in `AUTO_ARRIVED`. Move a drive stick or press Circle/B to return to normal TeleOp.
+12. When Fable reaches the arrival region, it immediately begins gooning. Use any other gamepad input to return to normal TeleOp.
 
-The Flask dashboard currently uses the label `autonomous` when a target is loaded. That is not authoritative robot mode feedback. Driver Station telemetry is the source of truth for `TELEOP`, `AUTO_NAVIGATING`, and `AUTO_ARRIVED`.
+The Flask dashboard currently uses the label `autonomous` when a target is loaded. That is not authoritative robot mode feedback. Driver Station telemetry is the source of truth for `TELEOP`, `AUTO_NAVIGATING`, and `GOONING`.
+
+## Gooning Mode
+
+Gooning continuously alternates straight forward and backward movement. It starts when Square/X is pressed or immediately after point-to-point arrival is confirmed. It does not require GPS, I2C, ESP-NOW, or a current target once active.
+
+The tunable values are near the top of `FableTeleOp.java`:
+
+| Constant | Default | Purpose |
+| --- | --- | --- |
+| `GOON_DIRECTION_SECONDS` | 1.25 seconds | Time spent moving in each direction before reversing |
+| `GOON_DRIVE_POWER` | 0.75 | Straight drivetrain command magnitude |
+| `GOON_INPUT_DEADBAND` | 0.15 | Analog input threshold used to interrupt the mode |
+
+Every transition into gooning begins by moving forward. After `GOON_DIRECTION_SECONDS`, Fable reverses; it then changes direction at the same interval until interrupted. Square/X itself is excluded from the interruption check. Pressing it again restarts the sequence in the forward direction.
+
+The interruption check includes Cross/A, Circle/B, Triangle/Y, the D-pad, Start/Back, either bumper, either trigger, and movement on any stick axis. Mechanism inputs therefore stop gooning and still reach their normal mechanism handlers in that loop.
 
 ## Required Data
 
@@ -76,7 +96,7 @@ A new target changes `targetSequence`. For this first version, Fable stops and r
 | --- | --- |
 | GPS/C3 snapshot production | 10 Hz |
 | Pico polling during `AUTO_NAVIGATING` | 5 Hz |
-| Pico polling in `TELEOP` or `AUTO_ARRIVED` | 1 Hz |
+| Pico polling in `TELEOP` or `GOONING` | 1 Hz |
 | IMU heading and motor command calculation | Every OpMode loop |
 | Driver Station telemetry transmission | Up to 10 Hz |
 
@@ -104,8 +124,8 @@ The first controller behaves as follows:
 - Slow from 0.90 toward 0.50 power inside 35 meters.
 - Keep both drivetrain sides moving in the same forward direction throughout a turn.
 - Never deliberately reverse.
-- Stop immediately upon entering the 10-meter arrival radius.
 - Declare arrival after three distinct GPS sequence updates remain inside that radius.
+- Transfer directly into gooning after arrival is confirmed.
 
 All speed and steering values are centralized in `PointToPointController` for field tuning.
 
@@ -120,6 +140,7 @@ The live Driver Station display includes:
 - Distance, bearing, compass heading, and heading error
 - Generated drive and turn commands
 - Arrival confirmation count
+- Gooning mode, current direction, and direction duration
 - Packet status, navigation sequence, and sequence age
 - ESP-NOW link state and command age, explicitly labeled informational
 
@@ -157,7 +178,8 @@ If positive heading error turns Fable left, stop testing and invert the autonomo
 3. Confirm Fable drives forward immediately and bends toward the target in a continuous arc.
 4. Watch GPS age, navigation sequence age, heading error, and generated motor commands.
 5. Test manual override, Flask Clear, GPS disconnection, and a changed target before increasing power.
-6. Approach the target and confirm the drivetrain stops while collecting three arrival confirmations.
+6. Approach the target and confirm the drivetrain enters `GOONING` after collecting three arrival confirmations.
+7. Use a non-Square input and confirm gooning ends immediately.
 
 ### Expected Stop Conditions
 
@@ -171,6 +193,8 @@ If positive heading error turns Fable left, stop testing and invert the autonomo
 | Target cleared | Stop and return to `TELEOP` |
 | Target changed | Stop and require Cross/A to re-arm |
 | Circle/B or manual stick input | Stop autonomous ownership and return to driver control |
+| Arrival confirmed | Leave autonomous navigation and immediately begin gooning |
+| Any non-Square input while gooning | Stop gooning and return to `TELEOP` |
 
 ## Tuning Order
 

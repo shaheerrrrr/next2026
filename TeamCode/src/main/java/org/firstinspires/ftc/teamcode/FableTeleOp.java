@@ -16,6 +16,11 @@ public class FableTeleOp extends LinearOpMode {
     private static final long AUTO_NAV_POLL_MS = 200;
     private static final double MANUAL_OVERRIDE_DEADBAND = 0.18;
 
+    // Gooning alternates between physical forward and backward motion.
+    private static final double GOON_DIRECTION_SECONDS = 1.25;
+    private static final double GOON_DRIVE_POWER = 0.75;
+    private static final double GOON_INPUT_DEADBAND = 0.15;
+
     // Manual forward/right input is negative in this deployed drivetrain convention.
     private static final double AUTO_DRIVE_SIGN = -1.0;
     private static final double AUTO_TURN_SIGN = 1.0;
@@ -23,11 +28,13 @@ public class FableTeleOp extends LinearOpMode {
     private DriveMode driveMode = DriveMode.TELEOP;
     private String modeDetail = "Driver control";
     private long activeTargetSequence = -1;
+    private long goonDirectionStartedMs = 0;
+    private boolean goonForward = true;
 
     private enum DriveMode {
         TELEOP,
         AUTO_NAVIGATING,
-        AUTO_ARRIVED
+        GOONING
     }
 
     @Override
@@ -71,6 +78,7 @@ public class FableTeleOp extends LinearOpMode {
 
             boolean lastA = gamepad1.a;
             boolean lastB = gamepad1.b;
+            boolean lastX = gamepad1.x;
             nextNavigationPollMs = 0;
 
             while (opModeIsActive()) {
@@ -86,15 +94,23 @@ public class FableTeleOp extends LinearOpMode {
 
                 boolean a = gamepad1.a;
                 boolean b = gamepad1.b;
+                boolean x = gamepad1.x;
                 boolean aPressed = a && !lastA;
                 boolean bPressed = b && !lastB;
+                boolean xPressed = x && !lastX;
                 lastA = a;
                 lastB = b;
+                lastX = x;
 
                 double manualDrive = gamepad1.left_stick_y;
                 double manualTurn = gamepad1.right_stick_x;
                 boolean manualOverride = Math.abs(manualDrive) > MANUAL_OVERRIDE_DEADBAND
                         || Math.abs(manualTurn) > MANUAL_OVERRIDE_DEADBAND;
+
+                if (xPressed) {
+                    pointController.reset();
+                    beginGooning(nowMs, "Square/X started gooning");
+                }
 
                 if (driveMode == DriveMode.TELEOP) {
                     if (aPressed) {
@@ -142,8 +158,8 @@ public class FableTeleOp extends LinearOpMode {
                     } else {
                         autoOutput = pointController.update(snapshot);
                         if (autoOutput.arrived) {
-                            drivetrain.stop();
-                            setDriveMode(DriveMode.AUTO_ARRIVED, "Arrived inside 10 m radius");
+                            pointController.reset();
+                            beginGooning(nowMs, "Target reached; gooning started");
                         } else {
                             drivetrain.drive(
                                     AUTO_DRIVE_SIGN * autoOutput.drive,
@@ -153,19 +169,30 @@ public class FableTeleOp extends LinearOpMode {
                     }
                 }
 
-                if (driveMode == DriveMode.AUTO_ARRIVED) {
-                    drivetrain.stop();
-                    if (manualOverride) {
+                if (driveMode == DriveMode.GOONING) {
+                    autoOutput = PointToPointController.Output.stopped("Gooning", 0);
+                    if (hasGooningInterruptInput()) {
+                        drivetrain.stop();
                         pointController.reset();
-                        setDriveMode(DriveMode.TELEOP, "Manual control after arrival");
-                        drivetrain.drive(manualDrive, manualTurn);
-                    } else if (bPressed) {
-                        pointController.reset();
-                        setDriveMode(DriveMode.TELEOP, "Arrival acknowledged with Circle/B");
-                    } else if (!snapshot.esp.targetValid()
-                            || snapshot.esp.targetSequence != activeTargetSequence) {
-                        pointController.reset();
-                        setDriveMode(DriveMode.TELEOP, "Target cleared or changed after arrival");
+                        setDriveMode(DriveMode.TELEOP, "Gooning interrupted by driver input");
+                        if (manualOverride) {
+                            drivetrain.drive(manualDrive, manualTurn);
+                        }
+                    } else {
+                        long directionDurationMs = Math.max(
+                                1L,
+                                Math.round(GOON_DIRECTION_SECONDS * 1000.0));
+                        if (nowMs - goonDirectionStartedMs >= directionDurationMs) {
+                            goonForward = !goonForward;
+                            goonDirectionStartedMs = nowMs;
+                        }
+
+                        double directionSign = goonForward ? AUTO_DRIVE_SIGN : -AUTO_DRIVE_SIGN;
+                        drivetrain.drive(directionSign * GOON_DRIVE_POWER, 0);
+                        modeDetail = String.format(
+                                "Gooning %s (%.1fs each way)",
+                                goonForward ? "forward" : "backward",
+                                GOON_DIRECTION_SECONDS);
                     }
                 }
 
@@ -190,6 +217,32 @@ public class FableTeleOp extends LinearOpMode {
         }
         driveMode = newMode;
         modeDetail = detail;
+    }
+
+    private void beginGooning(long nowMs, String detail) {
+        goonForward = true;
+        goonDirectionStartedMs = nowMs;
+        setDriveMode(DriveMode.GOONING, detail);
+    }
+
+    private boolean hasGooningInterruptInput() {
+        return gamepad1.a
+                || gamepad1.b
+                || gamepad1.y
+                || gamepad1.dpad_up
+                || gamepad1.dpad_down
+                || gamepad1.dpad_left
+                || gamepad1.dpad_right
+                || gamepad1.start
+                || gamepad1.back
+                || gamepad1.left_bumper
+                || gamepad1.right_bumper
+                || gamepad1.left_trigger > GOON_INPUT_DEADBAND
+                || gamepad1.right_trigger > GOON_INPUT_DEADBAND
+                || Math.abs(gamepad1.left_stick_x) > GOON_INPUT_DEADBAND
+                || Math.abs(gamepad1.left_stick_y) > GOON_INPUT_DEADBAND
+                || Math.abs(gamepad1.right_stick_x) > GOON_INPUT_DEADBAND
+                || Math.abs(gamepad1.right_stick_y) > GOON_INPUT_DEADBAND;
     }
 
     private static long monotonicMs() {
@@ -267,7 +320,8 @@ public class FableTeleOp extends LinearOpMode {
         if (initializing) {
             telemetry.addLine("Point Fable toward field north and press Triangle/Y, then START.");
         } else {
-            telemetry.addLine("Cross/A: start auto | Circle/B or drive sticks: manual override");
+            telemetry.addLine(
+                    "Cross/A: start auto | Square/X: gooning | any other input: interrupt");
         }
         telemetry.update();
     }
