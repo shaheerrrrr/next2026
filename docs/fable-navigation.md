@@ -86,7 +86,7 @@ The map layer toggle switches between OpenStreetMap street tiles and Esri World 
 
 When a target is sent, Fable visibly enters autonomous mode in the UI. The Fable robot selector tab keeps an `AUTO` badge even while the driver switches to Flash or Sol for tele-op.
 
-Selecting Fable and applying a meaningful tele-op input cancels autonomous mode automatically. Stick movement beyond the input deadband, either trigger above 5%, or any Fable face/bumper button switches the dashboard to tele-op and sends `CLEAR` over the navigation link. Inputs sent while Flash or Sol is selected do not interrupt Fable. The dashboard suppresses stale target telemetry while the clear command is being acknowledged.
+Selecting Fable and applying a navigation-exit input cancels autonomous mode automatically. Left-stick drive or right-stick turn beyond the same 18% deadband used by `FableTeleOp`, Circle/B, or Square/X switches the dashboard to tele-op and sends `CLEAR` over the navigation link. Cross/A is excluded because it arms point-to-point navigation; triggers and bumpers remain available for mechanism control during auto. Inputs sent while Flash or Sol is selected do not interrupt Fable. The dashboard suppresses stale target telemetry while the clear command is being acknowledged.
 
 ## Arduino Libraries
 
