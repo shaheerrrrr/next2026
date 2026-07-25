@@ -4,8 +4,8 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import org.firstinspires.ftc.teamcode.subsystems.CandyCane;
+import org.firstinspires.ftc.teamcode.subsystems.ChudIntake;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
-import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.NavigationSubsystem;
 import org.firstinspires.ftc.teamcode.navigation.NavigationSnapshot;
 import org.firstinspires.ftc.teamcode.navigation.PointToPointController;
@@ -41,7 +41,7 @@ public class FableTeleOp extends LinearOpMode {
     public void runOpMode() {
         Drivetrain drivetrain = new Drivetrain(hardwareMap);
         CandyCane candyCane = new CandyCane(hardwareMap);
-        Intake intake = new Intake(hardwareMap);
+        ChudIntake intake = new ChudIntake(hardwareMap);
         NavigationSubsystem navigation = new NavigationSubsystem(hardwareMap);
         PointToPointController pointController = new PointToPointController();
 
@@ -252,7 +252,7 @@ public class FableTeleOp extends LinearOpMode {
     private void showTelemetry(
             NavigationSnapshot snapshot,
             PointToPointController.Output autoOutput,
-            Intake intake,
+            ChudIntake intake,
             boolean initializing) {
         telemetry.addData("Drive mode", driveMode);
         telemetry.addData("Mode detail", modeDetail);

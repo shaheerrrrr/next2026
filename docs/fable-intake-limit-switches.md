@@ -1,5 +1,11 @@
 # Fable Intake Bottom Limit Switches
 
+> **Temporary roller-only configuration:** `FableTeleOp` currently uses
+> `ChudIntake`, which assumes the intake starts physically down and controls only
+> `IntakeMotor`. It does not initialize or move the lift servos and does not read
+> the bottom switches. `Intake.java` remains unchanged for restoration; the lift
+> behavior below does not apply while `ChudIntake` is selected.
+
 Fable uses two REV Touch Sensors as lower limit switches for the rack-and-pinion intake lift. Each continuous-rotation lift servo stops independently when its side reaches the bottom. This removes the previous timed downward overdrive that could make the servo horns cam out.
 
 The top endpoint remains timed. Reaching a bottom switch establishes a known full-travel position for that side, so upward timing always begins from a repeatable reference during a normal full deployment.
