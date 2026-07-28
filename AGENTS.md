@@ -58,7 +58,7 @@ branch and verify `git status` before making edits.
 | `sol/sol.ino` | Sol LoRa filtering and AVR HID output. |
 | `fable_driver_nav_esp32c3/` | Driver-side serial/ESP-NOW navigation bridge and visible status LED. |
 | `fable_robot_nav_esp32c3/` | Fable GPS ingestion, target state, telemetry, and Pico snapshot producer. |
-| `fable_navigation_bridge/` | Pico UART parser and I2C slave. |
+| `fable_navigation_bridge/` | Pico UART parser, navigation I2C slave, and core1 HC-SR04 ultrasonic I2C slave. |
 | `docs/` | Current operational, architectural, deployment, and protocol references. |
 
 ## Non-Negotiable Invariants
@@ -77,6 +77,11 @@ branch and verify `git status` before making edits.
 - Fable navigation is a separate ESP-NOW/UART/I2C data plane. Do not put GPS
   telemetry into the high-rate LoRa gamepad frame without an explicit redesign.
 - Fable's navigation I2C address is `0x42` and its ESP-NOW channel is `1`.
+- Fable's ultrasonic I2C address is `0x43` on the Pico's I2C1 bus. Its frame is
+  ASCII `FSON`, exactly `12` bytes, with `0xFFFF` as the only no-reading value.
+- The Pico's ultrasonic bridge runs on core1 and the navigation bridge runs on
+  core0. Neither core may read or write the other's buffers, and the ultrasonic
+  I2C slave must be initialized from code executing on core1.
 - Antennas must be attached before intentional LoRa transmission.
 
 ## Coupled Changes
@@ -124,6 +129,34 @@ or freshness rule changes, inspect all affected layers:
 
 Never change a packed C/C++ struct without checking exact byte size, field
 offsets, endianness, alignment attributes, and CRC coverage at every endpoint.
+
+### Fable Ultrasonic Transport
+
+If the `FSON` frame size, field offsets, version, CRC coverage, no-reading
+sentinel, ping cadence, valid range limits, or the `0x43` register protocol
+changes, inspect all affected layers:
+
+- `fable_navigation_bridge/main.c`
+- `docs/protocol.md`
+- Fable Control Hub ultrasonic driver on branch `fable`
+
+The Control Hub driver is being developed in parallel on the `fable` branch and
+is not edited from this worktree, but it is a real consumer of this contract and
+must be checked before any frame change ships.
+
+Also check `docs/deployment.md` when pins, wiring, power, pull-ups, or SDK
+libraries change, and `docs/architecture.md` when the core split or the data
+path changes.
+
+Two properties are structural. Do not relax either without an explicit redesign:
+
+- The ultrasonic path stays on I2C1 at `0x43` with its own buffers and its own
+  slave context. Merging it into the `0x42` register map would put a shared
+  buffer under two cores, and `save_and_disable_interrupts()` guards only the
+  executing core.
+- Nothing on core1 may call `printf` or any other stdio function. The stdio
+  mutexes are shared with core0's status output, and a stalled USB host would
+  then block core0 for up to a second.
 
 ### Dashboard State
 

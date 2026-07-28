@@ -16,6 +16,7 @@ target_link_libraries(fable_navigation_bridge
     hardware_i2c
     hardware_uart
     pico_i2c_slave
+    pico_multicore
     pico_stdlib
 )
 

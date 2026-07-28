@@ -52,11 +52,16 @@ flowchart LR
     Host["driver_station_flask.py"] -->|"USB serial commands"| DriverC3["Driver M5Stamp C3"]
     DriverC3 <-->|"ESP-NOW channel 1"| RobotC3["Fable robot ESP32-C3"]
     GPS["Adafruit GPS"] -->|"UART NMEA"| RobotC3
-    RobotC3 -->|"FNAV snapshot over UART"| Pico["Raspberry Pi Pico"]
-    Pico -->|"I2C address 0x42"| FableHub["Fable REV Control Hub"]
+    RobotC3 -->|"FNAV snapshot over UART"| Pico["Raspberry Pi Pico\ncore0"]
+    Pico -->|"I2C0 address 0x42"| FableHub["Fable REV Control Hub"]
+    Sonar["HC-SR04 rangefinder"] -->|"trigger and echo GPIO"| PicoCore1["Raspberry Pi Pico\ncore1"]
+    PicoCore1 -->|"I2C1 address 0x43"| FableHub
     RobotC3 -->|"GPS and target telemetry"| DriverC3
     DriverC3 -->|"newline JSON over USB serial"| Host
 ```
+
+Both Pico nodes above are the same physical board. They are drawn separately
+because the two data paths share no memory and no interrupt.
 
 ## Fleet Tele-Op Data Plane
 
@@ -206,7 +211,35 @@ The Control Hub reads four 14-byte chunks. When register zero is selected, the
 Pico latches a copy so all four reads belong to one snapshot and share one CRC.
 This avoids mixing bytes from consecutive GPS updates.
 
-### 5. Control Hub Navigation
+### 5. Pico Ultrasonic Sidecar
+
+The same Pico also carries an HC-SR04 rangefinder on GP `14` and GP `15`, and
+publishes a 12-byte CRC-protected `FSON` frame as a second I2C slave at address
+`0x43` on I2C1. A ping cycle runs roughly every 60 ms.
+
+This runs on the Pico's second core, and that placement is a correctness
+requirement rather than a performance preference. Ranging blocks for up to 45 ms
+waiting for an echo edge, because an HC-SR04 signals "no object" by holding echo
+high for about 38 ms. Core0's UART FIFO holds only about 3 ms of incoming FNAV
+bytes at 115200 baud, so a stall that long on core0 would corrupt snapshots
+mid-frame. Core1 removes that interaction, which lets the sensor driver stay a
+simple blocking loop.
+
+The two bridges are deliberately kept on separate buses with separate buffers.
+Disabling interrupts on an RP2040 affects only the core executing that
+instruction, so a shared buffer between the cores would need real cross-core
+locking. Separate ownership avoids that class of bug outright.
+
+The frame reports a distance in millimetres, or `0xFFFF` when a cycle produced
+no usable echo. A sequence number advances on every completed cycle regardless
+of result, so a consumer can tell a live sensor seeing open space from a stalled
+bridge. Exact bytes are in
+[Protocol Reference](protocol.md#pico-ultrasonic-snapshot).
+
+This path is sensing only. Fable's current point-to-point controller does not
+consume the distance reading and still performs no obstacle avoidance.
+
+### 6. Control Hub Navigation
 
 The Fable robot project on branch `fable` configures a custom I2C device named
 `FableNav`. Its navigation subsystem decodes the snapshot, applies freshness
@@ -270,6 +303,7 @@ before commanding a robot.
 | Navigation ESP-NOW | CRC, sequence, telemetry, heartbeat age | Broadcast and unencrypted; heartbeat is currently diagnostic |
 | C3 to Pico | Fixed length, magic, version, CRC | UART electrical/configuration errors stop updates |
 | Pico to Control Hub | Latched snapshot and CRC | Correct hardware name/address are still required |
+| Pico ultrasonic | Latched frame, CRC, range limits, advancing sequence | Sensing only; nothing consumes the distance or avoids obstacles |
 | Map UI | Target preview, field outline, explicit Send Target | Calibration is not a geofence |
 
 The operator must cancel Fable autonomy or stop its OpMode before shutting down

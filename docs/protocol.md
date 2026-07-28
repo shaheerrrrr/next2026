@@ -463,6 +463,106 @@ so the four chunks form one CRC-consistent 56-byte image.
 Reads beyond register 55 return zero. Extra write bytes in one transaction are
 ignored after the first register byte.
 
+## Pico Ultrasonic Snapshot
+
+The Pico also serves an HC-SR04 distance reading. This is a separate frame on a
+separate I2C bus with its own address. It shares no bytes, buffers, or registers
+with the `FNAV` snapshot above.
+
+### Source
+
+| Property | Value |
+| --- | --- |
+| Sensor | HC-SR04 ultrasonic rangefinder |
+| Producer | Raspberry Pi Pico core1 |
+| Consumer | Fable REV Control Hub over I2C |
+| Ping cadence | Approximately `60 ms` |
+| Frame length | `12` bytes |
+| Magic | ASCII `FSON` |
+| Version | `1` |
+
+### FSON Layout
+
+| Offset | Size | Field | Type | Meaning |
+| --- | --- | --- | --- | --- |
+| `0` | 4 | `magic` | bytes | ASCII `FSON` |
+| `4` | 1 | `version` | `uint8` | `1` |
+| `5` | 1 | `length` | `uint8` | `12` |
+| `6` | 2 | `distanceMm` | `uint16` | Distance in millimetres; `0xFFFF` means no valid reading |
+| `8` | 2 | `sampleSeq` | `uint16` | Increments once per completed ping cycle, wraps modulo 65536 |
+| `10` | 2 | `crc` | `uint16` | CRC over bytes `0..9` |
+
+The CRC is the same CRC-16/CCITT-FALSE used by every other Fable navigation
+message.
+
+### Distance Semantics
+
+`0xFFFF` is the only "no reading" value. Zero is not a sentinel; it remains a
+theoretically valid millimetre value even though the minimum-range check below
+never produces it.
+
+The Pico reports `0xFFFF` when any of these occur:
+
+- The echo line was still high when the next ping was due, so no trigger pulse
+  was emitted for that cycle.
+- No echo rising edge arrived within the rising-edge timeout.
+- The echo pulse stayed high past the `45 ms` falling-edge timeout, which is how
+  an HC-SR04 signals "no object detected".
+- The computed distance fell outside `20 mm` to `4000 mm`, the sensor's rated
+  range.
+
+Distance is computed from the measured echo pulse width as
+`distance_mm = pulse_width_us * 10 / 58`, using roughly 58 microseconds per
+centimetre of round-trip flight time.
+
+`sampleSeq` advances on every completed ping cycle whether or not that cycle
+produced a valid distance. A consumer therefore distinguishes a live bridge with
+no echo from a stalled bridge by watching `sampleSeq`, not by watching
+`distanceMm`. A `sampleSeq` that stops advancing means the Pico's ultrasonic
+core stopped, not that the sensor sees nothing.
+
+### Startup Frame
+
+Before the ultrasonic I2C slave answers its address, the Pico publishes a valid
+frame with `distanceMm` set to `0xFFFF` and `sampleSeq` set to `0`:
+
+```text
+46 53 4F 4E 01 0C FF FF 00 00 C2 4B
+```
+
+This guarantees that a Control Hub poll arriving immediately after power-up
+reads a CRC-valid frame rather than uninitialized bytes.
+
+## Ultrasonic I2C Register Protocol
+
+| Property | Value |
+| --- | --- |
+| Device role | I2C peripheral/slave |
+| Seven-bit address | `0x43` |
+| Bus | I2C1, `100 kHz` |
+| Register range | `0..11` |
+| Register contents | One byte of the current FSON frame |
+
+The Control Hub reads the 12-byte frame as one transaction:
+
+| Transaction | Start register | Length |
+| --- | --- | --- |
+| 1 | `0` | `12` |
+
+The register protocol is identical in shape to the `0x42` protocol. The first
+write byte in a transaction sets the register address. Selecting register `0`
+copies the latest published frame into a latched buffer, so a multi-byte read
+cannot mix bytes from two ping cycles and fail CRC.
+
+Reads beyond register 11 return zero. Extra write bytes in one transaction are
+ignored after the first register byte.
+
+This slave runs entirely on the Pico's second core. HC-SR04 ranging blocks for
+up to 45 ms waiting for an echo edge, which would drop bytes from the 115200
+baud `FNAV` UART stream if it ran on the same core as the UART parser. The two
+I2C slaves have separate buses, separate addresses, separate buffers, and
+separate register state, and neither core reads or writes the other's memory.
+
 ## Dashboard HTTP And SSE Interface
 
 The browser interface is local to the driver computer. It is not exposed to the
@@ -505,3 +605,23 @@ and this document as required.
 
 Do not increment a protocol version in only one component. A version change is
 a coordinated deployment event, not a local refactor.
+
+### Changing Fable Ultrasonic Sensing
+
+Any change to the `FSON` frame or the `0x43` register protocol must preserve
+little-endian encoding, exact size, CRC coverage over bytes `0..9`, and the
+`0xFFFF` no-reading sentinel across both endpoints. Update the Pico bridge, the
+Fable Control Hub ultrasonic driver, and this document as required.
+
+Two constraints are structural rather than cosmetic and must survive any edit:
+
+- The frame stays on its own bus and address. Do not append ultrasonic bytes to
+  the `0x42` register map. The two slaves are served by different cores, and
+  `save_and_disable_interrupts()` guards only the executing core, so a shared
+  buffer would need a real spinlock to be safe.
+- `sampleSeq` remains the liveness signal. Do not repurpose `distanceMm` to
+  encode sensor health.
+
+Growing the frame changes the Control Hub's single-transaction read length. Do
+not change the length without updating the consumer's read in the same
+deployment.

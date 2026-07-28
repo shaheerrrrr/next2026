@@ -19,7 +19,7 @@ Normal operators do not need to flash anything. They should use
 | Sol | Adafruit Feather 32u4 RFM95 | `sol/sol.ino` | Adafruit Feather 32u4 | Robot ID 3 LoRa receiver and USB HID gamepad |
 | Driver station, Fable navigation | M5Stamp C3 / ESP32-C3 | `fable_driver_nav_esp32c3/fable_driver_nav_esp32c3.ino` | M5Stamp C3 | USB serial to ESP-NOW bridge and visible status LED |
 | Fable robot | ESP32-C3 | `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` | Installed ESP32-C3 board target | GPS reader, ESP-NOW command/telemetry endpoint, UART snapshot producer |
-| Fable robot | Raspberry Pi Pico | `fable_navigation_bridge/` | Pico SDK C/C++ firmware | UART snapshot to I2C slave bridge |
+| Fable robot | Raspberry Pi Pico | `fable_navigation_bridge/` | Pico SDK C/C++ firmware | UART snapshot to I2C slave bridge and HC-SR04 ultrasonic I2C slave |
 | Flash Control Hub | REV Control Hub | Branch `flash` | FTC Robot Controller project | Flash mechanisms and tele-op behavior |
 | Fable Control Hub | REV Control Hub | Branch `fable` | FTC Robot Controller project | Fable mechanisms, navigation consumer, and autonomous drive logic |
 | Sol Control Hub | REV Control Hub | Branch `sol` | FTC Robot Controller project | Sol drive, turret, and shooter behavior |
@@ -266,8 +266,12 @@ Important files:
 
 | File | Purpose |
 | --- | --- |
-| `main.c` | UART parser, CRC validation, snapshot publication, and I2C slave |
+| `main.c` | UART parser, CRC validation, snapshot publication, both I2C slaves, and HC-SR04 ranging |
 | `CMakeLists.txt` | Pico SDK build definition |
+
+The Pico runs two independent jobs on two cores. Core0 owns the UART parser and
+the `0x42` navigation slave. Core1 owns the HC-SR04 and the `0x43` ultrasonic
+slave. Neither core reads or writes the other's buffers.
 
 ### Pinout
 
@@ -277,18 +281,79 @@ Important files:
 | UART0 RX | GP `1` |
 | I2C0 SDA | GP `4` |
 | I2C0 SCL | GP `5` |
-| Ground | GND shared with C3 and Control Hub interface |
+| I2C1 SDA | GP `6` |
+| I2C1 SCL | GP `7` |
+| HC-SR04 trigger output | GP `14` |
+| HC-SR04 echo input | GP `15` |
+| Ground | GND shared with C3, HC-SR04, and Control Hub interface |
 
 ### I2C Configuration
 
+Navigation snapshot slave:
+
 - Seven-bit address: `0x42`
-- Bus speed: `100 kHz`
+- Bus: I2C0, `100 kHz`
 - Snapshot length: `56` bytes
 - Control Hub reads: four chunks of `14` bytes
 
-The Pico acts as the I2C peripheral/slave. The REV Control Hub is the I2C
-controller/master. Use appropriate 3.3 V-compatible pull-ups and the deployed
-REV I2C cabling/interface.
+Ultrasonic slave:
+
+- Seven-bit address: `0x43`
+- Bus: I2C1, `100 kHz`
+- Frame length: `12` bytes
+- Control Hub reads: one transaction of `12` bytes
+
+The Pico acts as the I2C peripheral/slave on both buses. The REV Control Hub is
+the I2C controller/master. Use appropriate 3.3 V-compatible pull-ups and the
+deployed REV I2C cabling/interface.
+
+The REV I2C ports supply their own pull-ups, which is why the existing
+`FableNav` connection on I2C0 needs none added. The same expectation applies to
+whichever REV port carries I2C1. If I2C1 is instead wired to a port or breakout
+that does not supply them, fit external `2.2k` to `4.7k` pull-ups to 3.3 V on
+both SDA and SCL.
+
+### HC-SR04 Wiring
+
+| HC-SR04 pin | Connection |
+| --- | --- |
+| `VCC` | Control Hub `+5V` auxiliary output |
+| `TRIG` | Pico GP `14` directly |
+| `ECHO` | Pico GP `15` through a resistor divider |
+| `GND` | Shared ground with the Pico and the Control Hub |
+
+Two electrical requirements are mandatory. Neither is optional and neither is
+enforced by firmware.
+
+**Power the sensor from the Control Hub `+5V` auxiliary output**, the same rail
+that supplies the Pico's `VSYS`. Do not power it from the Pico's `VBUS` pin.
+`VBUS` is only live while USB is connected, and the deployed Pico runs with USB
+disconnected during normal robot operation, so a `VBUS`-powered sensor would go
+dead the moment the robot left the bench.
+
+**Fit a resistor divider between `ECHO` and GP `15`.** The HC-SR04 drives `ECHO`
+at 5 V and RP2040 GPIO is not 5 V tolerant; its absolute maximum is roughly
+`VIO + 0.3 V`, about `3.6 V`. Connecting `ECHO` straight to GP `15` can damage
+the Pico. A `1k` series resistor from `ECHO` to GP `15` with a `2k` resistor
+from GP `15` to ground brings the pulse to about `3.3 V`. Installing this
+divider is the physical wiring installer's responsibility.
+
+`TRIG` needs no level shifting. The HC-SR04 accepts the Pico's 3.3 V trigger
+pulse.
+
+### SDK Libraries
+
+The checked-in `CMakeLists.txt` links:
+
+- `hardware_i2c`
+- `hardware_uart`
+- `pico_i2c_slave`
+- `pico_multicore`
+- `pico_stdlib`
+
+`pico_multicore` is required by the ultrasonic bridge, which runs on core1.
+`pico_i2c_slave` already supports two simultaneous slave instances, so serving
+both `0x42` and `0x43` needs no additional library.
 
 ### Build Outline
 
@@ -340,6 +405,10 @@ Current Fable navigation assumptions include:
 - Navigation arming from PS4 Cross / FTC `gamepad1.a`
 - Manual override and exit logic implemented on the Control Hub
 
+The ultrasonic frame at I2C address `0x43` is a second, separate I2C device on
+the same Pico. Its Control Hub driver is being developed on branch `fable` and
+its hardware configuration name is set there, not by the Pico firmware.
+
 The current Fable branch also contains the temporary roller-only `ChudIntake`
 used by `FableTeleOp`. It assumes the intake begins physically down. The normal
 `Intake.java` remains in the branch. This is a robot-code condition, not a
@@ -374,6 +443,17 @@ Deploy every affected navigation endpoint as one set:
 
 Packed structures, CRC coverage, and freshness semantics must agree exactly.
 
+### Fable Ultrasonic Protocol Change
+
+The `FSON` frame and the `0x43` register protocol are independent of the
+navigation set above. Deploy these together:
+
+- Pico bridge
+- Fable Control Hub ultrasonic driver on branch `fable`
+
+A frame length change also changes the Control Hub's single-transaction read
+length. Do not ship one without the other.
+
 ## Post-Deployment Validation
 
 Perform validation from the nearest boundary outward.
@@ -400,6 +480,24 @@ Perform validation from the nearest boundary outward.
 7. Perform the first motion test with the robot restrained or at low power.
 8. Perform GPS navigation tests outdoors with an operator ready to stop the
    OpMode.
+
+### Fable Ultrasonic
+
+1. Confirm the `ECHO` resistor divider is installed and measures at or below
+   3.3 V at GP `15` before the Pico is connected to the sensor.
+2. Confirm the HC-SR04 is powered from the Control Hub `+5V` auxiliary output
+   and not from Pico `VBUS`, then confirm it still reads with USB unplugged.
+3. Confirm the Control Hub finds an I2C device at `0x43` on the I2C1 port.
+4. Confirm a `12`-byte read from register `0` returns magic `FSON`, version `1`,
+   length `12`, and a valid CRC.
+5. Confirm `sampleSeq` advances on repeated reads. A frozen `sampleSeq` means
+   the Pico's ultrasonic core stopped, not that the sensor sees nothing.
+6. Place a target at a known distance and confirm `distanceMm` is plausible.
+7. Aim the sensor at open space and confirm `distanceMm` reads `0xFFFF` while
+   `sampleSeq` keeps advancing.
+8. Confirm the `0x42` navigation snapshot still reads with a valid CRC and that
+   the Pico's USB status line still shows `uart_bad` staying flat. Ultrasonic
+   ranging must not disturb the UART parser.
 
 ## Hardware Safety
 

@@ -22,7 +22,7 @@
 #define FLAG_GPS_VALID 0x01
 #define FLAG_TARGET_VALID 0x02
 #define FLAG_SATS_VALID 0x04
-#define FLAG_HDOP_VALID 0x08
+#define FLAG_HDOP_VALID 0x08c:\Users\khans\OneDrive\Documents\GitHub\next2026\fable_driver_nav_esp32c3\fable_driver_nav_esp32c3.ino
 #define FLAG_DRIVER_LINK_ALIVE 0x10
 
 #define MSG_TYPE_TARGET 1

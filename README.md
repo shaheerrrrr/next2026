@@ -74,7 +74,7 @@ or stop the OpMode before shutting down the driver station.
 | `sol/sol.ino` | Sol's Feather 32u4 RFM95 LoRa receiver and USB HID gamepad. |
 | `fable_driver_nav_esp32c3/fable_driver_nav_esp32c3.ino` | Driver-side Fable ESP-NOW bridge and status LED. |
 | `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` | Robot-side GPS reader, ESP-NOW endpoint, telemetry source, and Pico UART producer. |
-| `fable_navigation_bridge/` | Pico UART-to-I2C navigation snapshot bridge. |
+| `fable_navigation_bridge/` | Pico UART-to-I2C navigation snapshot bridge and HC-SR04 ultrasonic I2C bridge. |
 | `docs/` | Human and agent-facing system documentation. |
 
 The FTC robot projects are maintained on the `flash`, `fable`, and `sol`
@@ -92,6 +92,7 @@ and shared documentation are maintained on `ftc-lora`.
 - Robot IDs: Flash `1`, Fable `2`, Sol `3`, broadcast `255`
 - Robot HID stale timeout: `250 ms`
 - Fable navigation I2C address: `0x42`
+- Fable ultrasonic I2C address: `0x43`
 - Fable ESP-NOW channel: `1`
 
 Treat deployed source code as ground truth when documentation and behavior ever
