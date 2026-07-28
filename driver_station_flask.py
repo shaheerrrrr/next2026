@@ -38,7 +38,7 @@ ROBOTS = {
     "fable": {
         "id": ROBOT_FABLE,
         "name": "Fable",
-        "role": "Tele-op now, GPS autonomy later",
+        "role": "Tele-op and GPS autonomy",
         "accent": ROBOT_ACCENTS["fable"],
         "profile": "standard",
     },
@@ -57,8 +57,7 @@ FABLE_NAV_SERIAL_BAUD = 115200
 FABLE_NAV_DEFAULT_FIELD_METERS = 12.0
 DEVICE_RETRY_SECONDS = 1.0
 UNO_RESET_SECONDS = 2.0
-FABLE_OVERRIDE_STICK_THRESHOLD = 80
-FABLE_OVERRIDE_TRIGGER_THRESHOLD = 50
+FABLE_OVERRIDE_STICK_THRESHOLD = 180
 FABLE_CLEAR_RETRY_SECONDS = 0.5
 
 # Packet v3:
@@ -857,7 +856,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="robot-switch" id="robotSwitch">
       <div class="switch-glider" id="switchGlider"></div>
       <button class="robot-tab active" data-robot="flash"><span class="tab-name">Flash</span><span class="tab-role">tele-op</span></button>
-      <button class="robot-tab" data-robot="fable"><span class="tab-name">Fable</span><span class="tab-role">tele-op + future auto</span></button>
+      <button class="robot-tab" data-robot="fable"><span class="tab-name">Fable</span><span class="tab-role">tele-op + gps auto</span></button>
       <button class="robot-tab" data-robot="sol"><span class="tab-name">Sol</span><span class="tab-role">turret / shooter</span></button>
     </div>
 
@@ -2138,16 +2137,14 @@ def trigger_to_u16(value):
 
 
 def fable_teleop_input_active(state):
-    sticks_active = any(
-        abs(state[axis]) >= FABLE_OVERRIDE_STICK_THRESHOLD
-        for axis in ("lx", "ly", "rx", "ry")
+    # Match FableTeleOp: Cross/A arms auto, while bumpers and triggers remain
+    # available as mechanism controls during autonomous navigation.
+    drivetrain_active = (
+        abs(state["ly"]) > FABLE_OVERRIDE_STICK_THRESHOLD
+        or abs(state["rx"]) > FABLE_OVERRIDE_STICK_THRESHOLD
     )
-    triggers_active = (
-        state["lt"] >= FABLE_OVERRIDE_TRIGGER_THRESHOLD
-        or state["rt"] >= FABLE_OVERRIDE_TRIGGER_THRESHOLD
-    )
-    fable_buttons = BTN_CROSS | BTN_CIRCLE | BTN_SQUARE | BTN_TRIANGLE | BTN_L1 | BTN_R1
-    return sticks_active or triggers_active or bool(state["buttons"] & fable_buttons)
+    navigation_exit_buttons = BTN_CIRCLE | BTN_SQUARE
+    return drivetrain_active or bool(state["buttons"] & navigation_exit_buttons)
 
 
 def checksum(payload):

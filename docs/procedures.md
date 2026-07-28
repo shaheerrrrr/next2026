@@ -1,141 +1,307 @@
-# Procedures
+# Runtime Procedures
 
-This file describes the basic process for getting the full LoRa control system running.
+This runbook is for operating the deployed fleet. It assumes the Uno, three
+Feathers, two Fable ESP32-C3 boards, Raspberry Pi Pico, Android phones, and REV
+Control Hubs are already programmed and wired.
 
-## Hardware Setup
+For board targets, source placement, wiring, or redeployment, use
+[Deployment Reference](deployment.md).
 
-### Driver Base
+## What You Need
 
-Connect:
+- A Mac or Windows computer with this repository
+- Python 3 and the packages in `requirements.txt`
+- A paired PS4/DS4 controller
+- The driver-side Arduino Uno and RFM95W connected by USB
+- The driver-side Fable M5Stamp C3 connected by USB when using Fable navigation
+- Antennas attached to every LoRa radio before transmission
+- The required robots powered, with each phone connected to its own Feather by
+  USB OTG and to its own REV Control Hub Wi-Fi network
 
-- PS4/DS4 controller to the MacBook over Bluetooth.
-- Arduino Uno to the MacBook over USB.
-- Adafruit RFM95W breakout to the Uno.
+The dashboard can start while hardware is absent, but it cannot control a robot
+until the required links are healthy.
 
-Known Uno wiring:
+## Normal Startup Order
 
-| RFM95W Breakout | Arduino Uno |
-| --- | --- |
-| VIN | 5V |
-| GND | GND |
-| SCK/SCLK | D13 |
-| MISO | D12 |
-| MOSI | D11 |
-| CS | D10 |
-| RST | D9 |
-| G0/DIO0/IRQ | D2 |
+This order makes status interpretation easiest, although the desktop app will
+retry missing devices if the order differs.
 
-Attach an antenna before transmitting.
+1. Attach all LoRa antennas.
+2. Power the robots that will be used.
+3. Confirm each Android phone is connected to its Feather by USB OTG.
+4. Confirm each phone is connected to its robot's REV Control Hub Wi-Fi.
+5. Open the FTC Driver Station app on each phone.
+6. Connect the driver-side Uno to the computer.
+7. Connect the driver-side Fable navigation C3 to the computer.
+8. Pair or wake the PS4/DS4 controller.
+9. Identify both serial ports.
+10. Start `driver_station_flask.py` with both ports.
+11. Open `http://127.0.0.1:8765`.
+12. Confirm the dashboard indicators before moving a robot.
 
-### Robot Side
+## Find Serial Ports
 
-Connect:
-
-- Android Driver Station phone to the REV Control Hub Wi-Fi AP.
-- Feather M0 RFM9x to the Android phone using USB OTG.
-- Antenna to the Feather radio.
-
-The Feather should appear to Android as a USB gamepad.
-
-## Software Setup
-
-Upload/flash:
-
-- [uno/uno.ino](../uno/uno.ino) to the Arduino Uno.
-- [feather/feather.ino](../feather/feather.ino) to the Feather M0 RFM9x.
-
-Both sketches use 915.0 MHz and 19-byte frames.
-
-## Start the Python Transmitter
-
-From the repository root:
+The same command works on macOS and Windows after Python dependencies are
+installed:
 
 ```bash
-cd ~/next2026
-source .venv/bin/activate
-python gamepad_lora_tx.py --port /dev/cu.usbmodem11301 --hz 20
+python -m serial.tools.list_ports -v
 ```
 
-Replace `/dev/cu.usbmodem11301` with the actual Uno serial port.
+Disconnect and reconnect one board if the device names are ambiguous. Run the
+command before and after reconnecting and compare the list.
 
-If the PS4 L1/R1 button indexes differ on the Mac, override them:
+### macOS Port Names
 
-```bash
-python gamepad_lora_tx.py --port /dev/cu.usbmodem11301 --hz 20 --l1-button 9 --r1-button 10
-```
-
-Open the dashboard:
+Typical ports look like:
 
 ```text
-http://127.0.0.1:8765
+/dev/cu.usbmodem11201
+/dev/cu.usbmodem11301
 ```
 
-## Start the Multi-Robot Flask Driver Station
+Use `/dev/cu.*` for outbound serial connections. The Uno and M5Stamp C3 will
+normally appear as two different entries.
 
-For Flash/Fable/Sol control, flash:
+You can also inspect likely devices with:
 
-- [driverstation/driverstation.ino](../driverstation/driverstation.ino) to the driver-side Uno.
-- [flash/flash.ino](../flash/flash.ino) to Flash's Feather.
-- [fable/fable.ino](../fable/fable.ino) to Fable's Feather.
-- [sol/sol.ino](../sol/sol.ino) to Sol's Feather.
+```bash
+ls /dev/cu.*
+```
 
-Install Python dependencies:
+### Windows Port Names
+
+Typical ports look like:
+
+```text
+COM5
+COM7
+```
+
+Windows Device Manager also lists them under **Ports (COM & LPT)**. Match each
+COM port to the Uno or M5Stamp by reconnecting one board at a time.
+
+## One-Time Python Setup
+
+Repeat this section only when setting up a new computer, replacing the virtual
+environment, or changing dependencies.
+
+### macOS Setup
 
 ```bash
 cd ~/next2026
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Run:
+If the repository is elsewhere, replace `~/next2026` with its path.
 
-```bash
-python driver_station_flask.py --port /dev/cu.usbmodem11301 --hz 20
+### Windows PowerShell Setup
+
+```powershell
+cd C:\path\to\next2026
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-With Fable GPS navigation enabled, also connect the driver-side ESP32-C3 and pass its serial port:
+If PowerShell blocks virtual-environment activation, allow scripts only for the
+current terminal and activate again:
 
-```bash
-python driver_station_flask.py --port /dev/cu.usbmodem11301 --fable-nav-port /dev/cu.usbmodemXXXXX --hz 20
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
 ```
 
-Open:
+## Start The Driver Station
+
+The first serial port is the Uno tele-op bridge. `--fable-nav-port` is the
+driver-side M5Stamp C3 used for Fable GPS telemetry and target commands. Both
+links run at 115200 baud by default.
+
+### macOS Command
+
+```bash
+cd ~/next2026
+source .venv/bin/activate
+python driver_station_flask.py \
+  --port /dev/cu.usbmodem11201 \
+  --fable-nav-port /dev/cu.usbmodem11301 \
+  --hz 20
+```
+
+Replace both example ports with the values found on your computer.
+
+### Windows PowerShell Command
+
+```powershell
+cd C:\path\to\next2026
+.\.venv\Scripts\Activate.ps1
+python .\driver_station_flask.py `
+  --port COM5 `
+  --fable-nav-port COM7 `
+  --hz 20
+```
+
+Replace `COM5` and `COM7` with the Uno and navigation C3 ports.
+
+The terminal should print the dashboard address. Open:
 
 ```text
 http://127.0.0.1:8765
 ```
 
-The dashboard starts even when the controller, Uno, or optional Fable navigation ESP is unavailable. The status indicators in the upper-right show which links are down, and the app retries configured devices automatically. Connect or reconnect the hardware without restarting the Python process; transmission resumes when both the gamepad and Uno are ready.
+Keep the terminal running for the entire operating session. Use one instance of
+the application at a time so two processes do not compete for serial ports.
 
-Use the top robot selector to choose which robot receives live tele-op HID controls. Press Space in the dashboard to cycle Flash -> Fable -> Sol without clicking.
+## Interpret Startup Indicators
 
-## Register the Controller in Driver Station
+The indicators at the top-right of the dashboard report independent links:
 
-1. Make sure the Feather is connected to the Android phone over USB OTG.
-2. Start the Python transmitter.
-3. Open the dashboard.
-4. Press the `Driver 1: Start + A` button.
-5. Confirm the Driver Station registers the controller as driver 1.
+| Indicator | Healthy meaning | If unhealthy |
+| --- | --- | --- |
+| Gamepad | Pygame has an active controller | Wake/pair the DS4 and wait for rediscovery |
+| Serial | The Uno tele-op serial port is open | Check the Uno USB cable and selected `--port` |
+| Fable Nav | The navigation C3 serial port is open so navigation messages can be exchanged | Check the M5Stamp USB cable, `--fable-nav-port`, and ESP-NOW sidecars |
+| Dashboard | Flask and the browser event stream are live | Reload the page or inspect the terminal |
 
-The dashboard injects the protocol Options/Start bit plus Cross/A. The Feather maps the Options/Start protocol bit to the HID button that was empirically found to work with the Driver Station.
+The application intentionally stays running if a specified port is absent or
+the controller is disconnected. It retries those connections. This allows the
+dashboard to explain the failure instead of exiting, but red or waiting status
+still means that function is unavailable.
 
-## Basic Bring-Up Checklist
+For the navigation C3's physical LED meanings, see
+[Driver Navigation LED](driver-navigation-led.md).
 
-Use this order when starting from cold hardware:
+## Register Each Robot
 
-1. Attach antennas to both radios.
-2. Power/connect the Uno and Feather.
-3. Confirm both sketches are flashed.
-4. Connect the Driver Station phone to the REV Control Hub Wi-Fi AP.
-5. Connect the Feather to the phone with USB OTG.
-6. Pair the DS4 controller to the Mac.
-7. Start `gamepad_lora_tx.py`.
-8. Open the dashboard and confirm live controller movement.
-9. Register the controller in Driver Station.
-10. Test sticks, triggers, buttons, and bumpers in robot code or a gamepad tester.
+The Android FTC Driver Station keeps controller registration per phone. Repeat
+this for every robot used in the session:
 
-## Normal Shutdown
+1. Select the robot in the dashboard.
+2. Confirm its phone is showing the FTC Driver Station app.
+3. Click **Register Driver 1**.
+4. Confirm the phone shows the USB controller assigned to Driver 1.
 
-Stop the Python transmitter with `Ctrl-C`.
+The dashboard briefly sends the known working Options plus Cross HID
+combination only to the selected robot. Registering Flash does not register
+Fable or Sol.
 
-The Feather will neutralize controls automatically if LoRa frames stop arriving.
+## Tele-Op Operation
+
+1. Select Flash, Fable, or Sol from the robot selector.
+2. Move a controller input while the robot is safely lifted or disabled.
+3. Confirm the dashboard visualization and selected robot's transmit log.
+4. Confirm the Android Driver Station shows a connected gamepad.
+5. Start the correct tele-op OpMode on that robot.
+6. Test at low power before driving at distance.
+
+Press Space while the web page has keyboard focus to cycle:
+
+```text
+Flash -> Fable -> Sol -> Flash
+```
+
+Do not use Space while typing in a text field or while a modal is handling
+keyboard input. The selector card shows which robot currently receives tele-op
+frames.
+
+## Fable Navigation Operation
+
+Use this only after Fable tele-op is registered and the Fable navigation link
+is receiving fresh GPS telemetry.
+
+1. Select Fable in the dashboard.
+2. Confirm **Current Position** is populated.
+3. Confirm GPS quality is `GOOD`, with a recent update and an advancing
+   navigation sequence.
+4. Confirm the Fable Control Hub OpMode reports a valid, fresh navigation
+   snapshot.
+5. Calibrate the field if the saved four-corner calibration is not correct for
+   the current site.
+6. Click the main map to preview a target. Review its coordinate and route line.
+7. Click **Send Target**. This sends and stores the target; it does not by itself
+   command the motors to move.
+8. Confirm the target becomes valid in Fable telemetry.
+9. With Fable selected, press PS4 Cross. It appears to FTC as `gamepad1.a` and
+   arms the current Fable navigation routine.
+10. Watch the robot, map, GPS quality, and Fable status continuously.
+
+After Fable is running autonomously, the driver may select Flash or Sol and
+tele-operate it. Fable's navigation command is being executed locally by its
+Control Hub, so it does not require Fable to remain the selected LoRa target.
+
+To take Fable back to tele-op, select Fable and provide a meaningful manual
+drive command or press the configured exit control. Current dashboard logic
+also clears its autonomous badge when that Fable tele-op override is sent.
+
+The complete target lifecycle, calibration behavior, and status caveats are in
+[Fable Navigation](fable-navigation.md).
+
+## Field Calibration
+
+Field calibration is stored by the browser on the driver computer.
+
+1. Select Fable.
+2. Click **Calibrate Field**.
+3. Populate each of the four corners by typing coordinates, clicking the
+   calibration map, or using Fable's current coordinate when available.
+4. Review the corner order and polygon preview.
+5. Save the calibration.
+6. Confirm the main map fits the field outline with a small buffer.
+
+Calibration does not open automatically. It is not transmitted to the Control
+Hub and is not a geofence. Clearing browser site data can remove the saved
+corners.
+
+Street and satellite map tiles require internet access. Coordinate telemetry
+and transport do not depend on the visual tile provider, but target selection
+is much easier with the map loaded.
+
+## Recover From A Disconnection
+
+### Controller
+
+1. Wake or reconnect the DS4.
+2. Watch the Gamepad indicator.
+3. Verify every control in the dashboard before moving a robot.
+
+### Uno
+
+1. Stop robot motion safely.
+2. Reconnect the Uno USB cable.
+3. Confirm the same serial device name still exists.
+4. Wait for the Serial indicator to recover.
+5. Restart the application with the new `--port` if the operating system
+   assigned a different device name.
+
+### Fable Navigation C3
+
+1. Keep Fable stopped or under direct supervision.
+2. Reconnect the M5Stamp USB cable.
+3. Wait for the Fable Nav indicator and physical LED to recover.
+4. Restart with the new `--fable-nav-port` if its port changed.
+5. Confirm GPS telemetry is fresh before sending another target.
+
+### Browser
+
+Reload `http://127.0.0.1:8765`. Reloading the browser does not restart the
+Python controller or serial threads. A browser reload can reconstruct dashboard
+state from the server, but map calibration comes from that browser's local
+storage.
+
+## Safe Shutdown
+
+1. Stop or cancel Fable autonomy if it was armed.
+2. Stop each active FTC OpMode, or otherwise make every robot mechanically safe.
+3. Confirm drive, intake, turret, shooter, and dump mechanisms are stopped.
+4. Press `Ctrl-C` in the driver-station terminal.
+5. Power down robots and radios.
+6. Disconnect USB hardware if required.
+
+Do not treat `Ctrl-C`, closing the browser, losing LoRa, or unplugging the Uno
+as an autonomous emergency stop. The Feather neutral timeout protects HID
+tele-op state, while Fable autonomous motion is controlled by the Control Hub.
