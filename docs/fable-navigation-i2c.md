@@ -1,6 +1,6 @@
 # Fable Navigation Sidecar
 
-This document defines Fable's GPS and target-coordinate transport. The drivetrain mode and point-to-point controller built on this data are documented in `docs/fable-autonomous-mode.md`. Obstacle avoidance is not implemented yet.
+This document defines Fable's GPS and target-coordinate transport. The drivetrain mode, point-to-point controller, and obstacle avoidance built on this data are documented in `docs/fable-autonomous-mode.md`.
 
 The proven LoRa USB HID tele-op path is independent and remains unchanged.
 
@@ -85,6 +85,25 @@ Use a REV JST-PH 4-pin sensor cable on I2C Bus 1, 2, or 3. The existing configur
 
 The REV bus is 3.3 V and already has pull-up resistors. The Pico firmware also enables its weak internal pull-ups as a wiring fail-safe.
 
+### HC-SR04 ultrasonic rangefinder
+
+Fable's HC-SR04 provides short-range (up to about 4 m) forward proximity for front-bumper cutoff and docking confirmation. It is a scalar distance with roughly a 15-degree beam cone and no object classification.
+
+The HC-SR04 is served by the same Pico WH, but on a second, fully independent I2C peripheral bus. The Pico presents `i2c1` at 7-bit address `0x43`, entirely separate from the `i2c0` navigation bridge at `0x42`. The two buses share no wiring and no register map.
+
+| REV I2C wire | Pico WH | Function |
+| --- | --- | --- |
+| Black | GND | Ground |
+| White | I2C1 SDA | I2C1 SDA |
+| Blue | I2C1 SCL | I2C1 SCL |
+| Red | Not connected | Do not use for bridge power |
+
+Use a second REV JST-PH 4-pin sensor cable on a bus distinct from the one carrying `FableNav`. The deployed configuration uses **I2C Bus 2, Port 0**, leaving the existing Bus 1, Port 0 untouched.
+
+The HC-SR04 trigger and echo pin assignments on the Pico are owned by the Pico firmware and are documented with that firmware. The Control Hub never sees them; it only reads the published `FSON` frame described below.
+
+The HC-SR04 echo pin idles at 5 V and must not be wired directly to a 3.3 V Pico GPIO. Level shifting or a divider on the echo line is a firmware-side wiring requirement.
+
 ### Power
 
 For installed robot operation, use one Control Hub `+5V Power` auxiliary output:
@@ -93,9 +112,12 @@ For installed robot operation, use one Control Hub `+5V Power` auxiliary output:
 | --- | --- |
 | +5 V | Pico `VSYS`, physical pin 39 |
 | +5 V | ESP32-C3 board `5V` or `VIN` input |
-| Ground | Pico GND and ESP32-C3 GND |
+| +5 V | HC-SR04 `VCC` |
+| Ground | Pico GND, ESP32-C3 GND, and HC-SR04 GND |
 
 Only use the pin on the exact C3 board documented as a regulated 5 V input. Do not apply 5 V to a C3 `3V3` pin. The GPS can be powered from the C3's 3V3 output as shown above.
+
+The HC-SR04 takes its 5 V from this same auxiliary rail, the one already feeding the Pico `VSYS`. Do not power it from the Pico's `VBUS` pin. `VBUS` is only live while USB is connected, and USB is disconnected during normal deployed operation.
 
 During bench flashing, power each board by USB and leave the Control Hub auxiliary 5 V disconnected. Avoid powering the Pico from USB and external VSYS at the same time during initial bring-up.
 
@@ -156,11 +178,15 @@ The bridge remains a read-only navigation data device from the Control Hub's per
 2. Open the active Robot Configuration.
 3. On I2C Bus 1, Port 0, add `Fable ESP Navigation`.
 4. Name it exactly `FableNav`.
-5. Confirm the integrated IMU is named `imu`.
-6. Save and activate the configuration.
-7. Initialize the `Fable` OpMode and inspect its navigation telemetry.
+5. On I2C Bus 2, Port 0, add `Fable Ultrasonic`.
+6. Name it exactly `FableSonar`.
+7. Confirm the integrated IMU is named `imu`.
+8. Save and activate the configuration.
+9. Initialize the `Fable` OpMode and inspect its navigation telemetry.
 
 The `Fable` OpMode polls at 1 Hz in TeleOp and 5 Hz while navigating.
+
+`FableSonar` and `FableNav` are independent devices on independent buses. Registering one does not require the other, and a missing or misconfigured `FableSonar` does not affect navigation. `FableTeleOp` polls `UltrasonicSubsystem.pollDistance()` once per loop iteration, unconditionally and not rate-limited, and feeds each reading to `ObstacleAvoidanceController`, which can override the drive command produced by `PointToPointController` during `AUTO_NAVIGATING` and `GOONING`. See `docs/fable-autonomous-mode.md` for the avoidance state machine, telemetry, and tuning order; this document only covers the wire protocol the reading comes from.
 
 ## Bring-Up Order
 
@@ -222,6 +248,29 @@ Flag byte at offset 6:
 | 4 | `0x10` | Driver ESP-NOW link is alive |
 
 CRC parameters are polynomial `0x1021`, initial value `0xFFFF`, no reflection, and no final XOR.
+
+## I2C Protocol — FSON Frame
+
+The HC-SR04 rangefinder is a separate device on a separate bus. The Pico serves it from `i2c1` at 7-bit address `0x43`, with its own 12-byte read-only register map beginning at register `0x00`. The Control Hub reads offset `0x00` and requests all 12 bytes in a single transaction; the frame is small enough that no chunking is needed. The Pico latches its published frame when register `0x00` is selected, the same way it does for `FNAV`.
+
+The magic is `FSON`, not `FNAV`, specifically so the Control Hub can tell which device it is talking to if a cable is on the wrong port.
+
+All multi-byte values are little-endian.
+
+| Offset | Size | Type | Field |
+| ---: | ---: | --- | --- |
+| 0 | 4 | bytes | ASCII magic `FSON` |
+| 4 | 1 | uint8 | Protocol version, currently `1` |
+| 5 | 1 | uint8 | Frame length, currently `12` |
+| 6 | 2 | uint16 | Distance in millimetres; `0xFFFF` means no valid reading |
+| 8 | 2 | uint16 | Sample sequence, increments once per completed ping cycle |
+| 10 | 2 | uint16 | CRC-16/CCITT-FALSE over bytes 0-9 |
+
+CRC parameters are identical to `FNAV`: polynomial `0x1021`, initial value `0xFFFF`, no reflection, and no final XOR. The Java driver reuses `FableNavigationI2cDevice.crc16Ccitt` rather than carrying a second copy of the algorithm.
+
+`0xFFFF` at offset 6 is a normal sentinel, not an error. A timeout, a target beyond about 4 m, or a weak echo off an angled surface all produce a live device with nothing to report. `UltrasonicReading.packetValid()` reports whether the I2C transaction and CRC succeeded; `UltrasonicReading.hasDistance()` reports whether there is an actual usable number. Those are different conditions and callers must distinguish them. `distanceMeters()` returns `NaN` when there is no reading, so an absent measurement can never be mistaken for zero distance.
+
+The sample sequence at offset 8 increments by one per completed ping cycle, roughly every 60 ms, and wraps naturally at 65536. It plays the same role for this device that the navigation sequence plays for `FNAV`: it distinguishes a device that is alive and cycling but has nothing to report from a device or bridge that is dead.
 
 ## IMU Heading Frame
 
