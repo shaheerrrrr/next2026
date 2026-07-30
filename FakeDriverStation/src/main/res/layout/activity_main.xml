@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Realistic stand-in for the FTC Driver Station app's control surface.
+
+  Layout intentionally mirrors the real DS app's shape closely enough to
+  exercise the RobotReset resolver end to end: a disabled INIT button that
+  only becomes enabled after an OpMode is selected (Gotcha 3), START/STOP
+  buttons, and a "Select OpMode" control that reveals a scrollable list whose
+  population is deliberately delayed and event-driven rather than instant
+  (see MainActivity#openOpModeList).
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tv_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Fake Driver Station"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="12dp" />
+
+    <TextView
+        android:id="@+id/tv_selected_opmode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="No OpMode selected"
+        android:layout_marginBottom="12dp" />
+
+    <Button
+        android:id="@+id/btn_select_opmode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Select OpMode"
+        android:layout_marginBottom="8dp" />
+
+    <ListView
+        android:id="@+id/list_opmode"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:visibility="gone"
+        android:layout_marginBottom="8dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_init"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:enabled="false"
+            android:text="INIT"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btn_start"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="START"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btn_stop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="STOP" />
+
+    </LinearLayout>
+
+</LinearLayout>

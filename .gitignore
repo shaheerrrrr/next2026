@@ -1,3 +1,6 @@
+# Claude Code agent worktree scratch space (transient orchestration artifacts)
+.claude/worktrees/
+
 # Built application files
 *.apk
 *.aar

@@ -1,7 +1,10 @@
 /**
- * Top-level build file for ftc_app project.
+ * Top-level build file for robot-reset-app.
  *
- * It is extraordinarily rare that you will ever need to edit this file.
+ * Standalone Android project — no dependency on the FTC SDK. Builds a small
+ * AccessibilityService APK that resolves and clicks UI elements on the FTC
+ * Driver Station app. See docs/robot-reset-app-brief.md and
+ * docs/design-accessibility-tap.md for the full design.
  */
 
 buildscript {
@@ -10,20 +13,13 @@ buildscript {
         google()
     }
     dependencies {
-        // Note for FTC Teams: Do not modify this yourself.
         classpath 'com.android.tools.build:gradle:8.7.0'
     }
 }
 
-// This is now required because aapt2 has to be downloaded from the
-// google() repository beginning with version 3.2 of the Android Gradle Plugin
 allprojects {
     repositories {
         mavenCentral()
         google()
     }
-}
-
-repositories {
-    mavenCentral()
 }

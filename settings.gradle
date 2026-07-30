@@ -1,2 +1,4 @@
-include ':FtcRobotController'
-include ':TeamCode'
+rootProject.name = 'robot-reset-app'
+
+include ':RobotReset'
+include ':FakeDriverStation'
