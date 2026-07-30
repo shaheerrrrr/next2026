@@ -2,6 +2,7 @@ package com.next2026.robotreset;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
 
@@ -40,11 +41,52 @@ import com.next2026.robotreset.ui.ServiceConnectionState;
  */
 public final class RobotResetService extends AccessibilityService {
 
+    /**
+     * Single logcat tag for the whole app, so bench debugging is
+     * {@code adb logcat -s RobotReset:V} (see tools/logcat-robotreset.ps1).
+     * The in-app Key Monitor and Status screens are the no-cable equivalent.
+     */
+    public static final String TAG = "RobotReset";
+
+    /**
+     * TESTING HOOK (debug builds only): a live reference to the connected
+     * service instance, set in {@link #onServiceConnected()} and cleared in
+     * {@link #onDestroy()}. Exists solely so the debug-only
+     * {@code DebugCommandReceiver} (src/debug/, absent from release builds --
+     * see its class doc comment) can forward a broadcast into the exact same
+     * {@link #handleCommand(ChordDecoder.Decoded)} path a real chord drives,
+     * for emulator E2E testing (tools/e2e.ps1). {@code adb shell input}
+     * cannot reach {@link #onKeyEvent} at all (it bypasses the accessibility
+     * KeyboardInterceptor stage), so this is the seam that makes resolution
+     * testable without a real USB HID keyboard. {@code volatile} because it
+     * is written on the main thread but this static field is technically
+     * reachable from any thread that holds a reference to the class.
+     */
+    private static volatile RobotResetService instance;
+
     private final Resolver resolver = new ResolverImpl();
     private final ResolutionLog log = new ResolutionLog();
 
     private UiTree uiTree;
     private OpModeSelector opModeSelector;
+
+    /**
+     * TESTING HOOK (debug builds only). Forwards to the live instance's
+     * {@link #handleCommand(ChordDecoder.Decoded)} -- the identical code
+     * path a real Ctrl+Alt+Fn chord drives from {@link #onKeyEvent} -- so a
+     * debug-build test trigger cannot drift from production behavior. Logs
+     * and returns harmlessly if the service isn't connected. See
+     * {@code DebugCommandReceiver} for the only caller.
+     */
+    static void dispatchDebugCommand(ChordDecoder.Decoded decoded) {
+        RobotResetService service = instance;
+        if (service == null) {
+            Log.w(TAG, "dispatchDebugCommand: no connected RobotResetService instance, dropping "
+                    + decoded);
+            return;
+        }
+        service.handleCommand(decoded);
+    }
 
     @Override
     protected void onServiceConnected() {
@@ -65,6 +107,8 @@ public final class RobotResetService extends AccessibilityService {
         opModeSelector = new OpModeSelector(resolver, log);
 
         ServiceConnectionState.setConnected(true);
+        instance = this;
+        Log.i(TAG, "service connected; key event filtering requested");
     }
 
     @Override
@@ -86,6 +130,13 @@ public final class RobotResetService extends AccessibilityService {
                 && event.getRepeatCount() == 0;
 
         KeyEventLog.add(keyCode, metaState, decoded.command, consumed);
+        Log.d(TAG, "onKeyEvent keyCode=" + keyCode
+                + " meta=0x" + Integer.toHexString(metaState)
+                + " action=" + event.getAction()
+                + " repeat=" + event.getRepeatCount()
+                + " decoded=" + decoded.command
+                + " slot=" + decoded.slotIndex
+                + " consumed=" + consumed);
 
         if (matched && isInitialDown) {
             // Act on every match regardless of the consume toggle: that toggle
@@ -151,6 +202,9 @@ public final class RobotResetService extends AccessibilityService {
     @Override
     public void onDestroy() {
         ServiceConnectionState.setConnected(false);
+        if (instance == this) {
+            instance = null;
+        }
         super.onDestroy();
     }
 }

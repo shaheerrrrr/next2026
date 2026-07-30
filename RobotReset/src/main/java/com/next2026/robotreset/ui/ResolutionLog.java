@@ -60,6 +60,12 @@ public final class ResolutionLog implements ActionLog {
     }
 
     public static synchronized void add(String label, boolean clicked, String reason) {
+        // Mirror to logcat as well as the in-process buffer: the buffer serves
+        // the on-device Status screen (no cable needed), logcat serves bench
+        // debugging over a cable. Both matter — see docs/robot-reset-app-brief.md.
+        android.util.Log.d("RobotReset",
+                "resolve label=" + label + " clicked=" + clicked + " reason=" + reason);
+
         Entry entry = new Entry(System.currentTimeMillis(), label, clicked, reason);
         if (ENTRIES.size() >= MAX_ENTRIES) {
             ENTRIES.removeLast();

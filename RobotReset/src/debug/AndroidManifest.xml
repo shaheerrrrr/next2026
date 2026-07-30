@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-only manifest fragment. AGP merges this into debug builds ONLY
+    (source set `debug`, alongside `main`); it is absent from `release`
+    entirely because there is no src/release counterpart declaring it and
+    manifest merging only adds what a build's own source sets contribute.
+
+    DebugCommandReceiver exists purely so the emulator E2E harness
+    (tools/e2e.ps1) can drive the exact same handleCommand() path a real
+    Ctrl+Alt+Fn chord drives, without needing a real USB HID keyboard event
+    (see RobotResetService's TESTING HOOK doc comment and
+    docs/e2e-harness.md for why `adb shell input` cannot reach onKeyEvent).
+
+    android:exported="true" is required for `adb shell am broadcast` to
+    reach this receiver from the shell UID; that is the whole reason it must
+    never ship in a release build. A broadcast that can press a robot's
+    INIT/START/STOP must not exist in a build a user could install.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".DebugCommandReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="com.next2026.robotreset.DEBUG_COMMAND" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

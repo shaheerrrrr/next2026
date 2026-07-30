@@ -2,8 +2,8 @@
 .SYNOPSIS
     Automated emulator gate for robot-reset-app: boots the AVD, installs
     RobotReset + FakeDriverStation, enables the accessibility service, fires
-    the trigger chords via adb, and asserts on the resulting FakeDriverStation
-    logcat markers.
+    the debug-only DEBUG_COMMAND broadcast trigger via adb, and asserts on
+    the resulting FakeDriverStation logcat markers.
 
 .DESCRIPTION
     See docs/e2e-harness.md for what each test case proves and known
@@ -12,15 +12,49 @@
         . .\tools\env.ps1
         .\tools\e2e.ps1
 
-    IMPORTANT: at the time this script was written, RobotResetService's
-    onKeyEvent only logs matched chords (see RobotResetService.java's Phase 1
-    doc comment) — it does not yet call any resolver to actually click
-    anything. That wiring is a pending integration step owned by the
-    orchestrator, done once all four lanes land. Until that lands, every test
-    case here that asserts a click/selection marker WILL fail, by design —
-    that is not a bug in this harness. The "no marker while disabled" and
-    "no marker when not foregrounded" negative-control cases will pass
-    regardless, since they assert absence.
+    ===========================================================================
+    WHY THIS HARNESS DOES NOT FIRE REAL KEY-EVENT CHORDS (read before touching
+    Send-Chord below)
+    ===========================================================================
+    This harness used to fire chords with
+    `adb shell input keycombination <ctrl> <alt> <Fn>` (and, before that,
+    plain `adb shell input keyevent`). Neither ever produced a single
+    onKeyEvent log line, even with the accessibility service correctly bound
+    and FLAG_REQUEST_FILTER_KEY_EVENTS confirmed active
+    (`adb shell dumpsys accessibility` showed
+    `Enabled features of Display [0] = [KeyboardInterceptor]`).
+
+    Root cause: `adb shell input` injects events via
+    `InputManager.injectInputEvent`. That path is synthetic input injection,
+    not a real hardware input device, and the accessibility
+    KeyboardInterceptor stage that feeds onKeyEvent only observes real
+    hardware input devices. This is true on an emulator AND on real hardware
+    -- it is not an emulator quirk. `sendevent`/uinput were considered and
+    rejected as out of scope and fragile (they'd require injecting at the
+    kernel evdev layer, faking a whole USB HID keyboard's report descriptor).
+
+    Consequence: the Ctrl+Alt+F1..F8 chord trigger path itself -- a real USB
+    HID keyboard producing a real onKeyEvent callback -- is UNTESTABLE via
+    adb, full stop. It is covered ONLY by the brief's "Step 0" real-hardware
+    bench check (docs/robot-reset-app-brief.md section 7), not by this
+    script, not ever by this script.
+
+    What IS fully testable on the emulator -- and the reason this harness
+    still exists and is worth running constantly -- is everything downstream
+    of chord decoding: element resolution, the clickable-ancestor walk
+    (Gotcha 2), the disabled-node no-op (Gotcha 3), and the OpMode dropdown
+    open/wait/scroll/match state machine. That is the biggest and most
+    gotcha-prone part of this app. To exercise it without a real key event,
+    RobotResetService exposes a debug-build-only broadcast receiver,
+    DebugCommandReceiver (RobotReset/src/debug/), which forwards directly
+    into the SAME handleCommand(ChordDecoder.Decoded) that onKeyEvent calls
+    for a real chord -- not a reimplementation of it. That receiver is
+    compiled only into debug builds (AGP's `debug` source set) and is
+    verifiably absent from the release manifest; see docs/e2e-harness.md for
+    the merged-manifest evidence. This harness's Send-Chord function below
+    fires that broadcast, despite the name (kept for call-site continuity;
+    it no longer sends a KeyEvent of any kind).
+    ===========================================================================
 
 .PARAMETER AvdName
     Name of the AVD to boot if not already running. Default: RobotResetTest.
@@ -45,7 +79,12 @@ param(
     [int]$BootTimeoutSec = 240
 )
 
-$ErrorActionPreference = "Stop"
+# Deliberately NOT "Stop". Windows PowerShell 5.1 wraps any native executable's
+# stderr output in a NativeCommandError ErrorRecord, so with "Stop" a perfectly
+# successful `adb pull` (which reports transfer progress on stderr) aborts the
+# whole script. Every operation whose failure actually matters checks
+# $LASTEXITCODE explicitly below and exits non-zero itself.
+$ErrorActionPreference = "Continue"
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -75,16 +114,13 @@ $FdsLogTag = "FakeDriverStation"
 $RobotResetApk = Join-Path $RepoRoot "RobotReset\build\outputs\apk\debug\RobotReset-debug.apk"
 $FdsApk = Join-Path $RepoRoot "FakeDriverStation\build\outputs\apk\debug\FakeDriverStation-debug.apk"
 
-# HID keycodes per docs/robot-reset-app-brief.md's chord table.
-$KC_CTRL_LEFT = 113
-$KC_ALT_LEFT = 57
-$KC_F1 = 131
-$KC_F2 = 132
-$KC_F3 = 133
-$KC_F5 = 135
-$KC_F6 = 136
-$KC_F7 = 137
-$KC_F8 = 138
+# DEBUG_COMMAND broadcast action + extras (see RobotReset/src/debug/DebugCommandReceiver.java).
+$DebugCommandAction = "com.next2026.robotreset.DEBUG_COMMAND"
+
+# KC_HOME is a real Android keycode (not a chord) used only to navigate the
+# emulator away from FakeDriverStation for the "not foregrounded" negative
+# control below -- `adb shell input keyevent` is perfectly fine for that,
+# since it isn't standing in for the untestable HID chord path.
 $KC_HOME = 3
 
 $script:FailCount = 0
@@ -95,7 +131,7 @@ $script:Results = @()
 # ---------------------------------------------------------------------------
 
 function Test-EmulatorRunning {
-    $devices = & $adb devices 2>$null
+    $devices = & $adb devices
     foreach ($line in $devices) {
         if ($line -match "^emulator-\d+\s+device\s*$") {
             return $true
@@ -109,7 +145,7 @@ function Wait-ForBoot {
     & $adb wait-for-device
     $elapsed = 0
     while ($true) {
-        $boot = "$(& $adb shell getprop sys.boot_completed 2>$null)".Trim()
+        $boot = "$(& $adb shell getprop sys.boot_completed)".Trim()
         if ($boot -eq "1") {
             return $true
         }
@@ -122,14 +158,84 @@ function Wait-ForBoot {
 }
 
 function Send-Chord {
-    param([int]$TargetKeyCode)
-    & $adb shell input keycombination $KC_CTRL_LEFT $KC_ALT_LEFT $TargetKeyCode | Out-Null
+    # Despite the name (kept because every call site below reads naturally as
+    # "send the chord that would select/press X"), this does NOT send a
+    # KeyEvent of any kind. It fires the debug-only DEBUG_COMMAND broadcast
+    # that DebugCommandReceiver forwards straight into
+    # RobotResetService.handleCommand(...) -- the same method a real
+    # Ctrl+Alt+Fn chord's onKeyEvent calls. See the big comment block at the
+    # top of this script for why `adb shell input` cannot be used instead.
+    #
+    # -p targets the package explicitly so the broadcast can't be picked up
+    # by anything else. --include-stopped-packages is harmless insurance
+    # (BR_include-stopped) in case the process ever isn't already running;
+    # it's not expected to matter since the accessibility service keeps the
+    # process alive, but costs nothing to include.
+    param(
+        [string]$Command,        # ChordDecoder.Command name: INIT, START, STOP, OPMODE_SLOT
+        [int]$Slot = -1           # only meaningful when $Command -eq "OPMODE_SLOT"
+    )
+    $args = @(
+        "shell", "am", "broadcast",
+        "-a", $DebugCommandAction,
+        "-p", $RobotResetPkg,
+        "--include-stopped-packages",
+        "--es", "cmd", $Command
+    )
+    if ($Command -eq "OPMODE_SLOT") {
+        $args += @("--ei", "slot", "$Slot")
+    }
+    & $adb @args | Out-Null
 }
 
 function Get-FdsLogcat {
     # -d dumps and exits (does not block); -s filters by tag.
-    $lines = & $adb logcat -d -s "$FdsLogTag`:I" 2>$null
+    $lines = & $adb logcat -d -s "$FdsLogTag`:I"
     return ($lines -join "`n")
+}
+
+function Reset-Fds {
+    # Force-stop + relaunch FakeDriverStation so every test case starts from
+    # a known, cold state: INIT disabled, no OpMode selected, list not open
+    # or populated. MainActivity (FakeDriverStation/.../MainActivity.java)
+    # keeps all of that as plain in-memory Activity state with no
+    # persistence, so force-stop genuinely resets it -- this isn't
+    # cosmetic.
+    #
+    # Why this exists: the suite used to report 7/7 PASS with a real bug in
+    # OpModeSelector present (it gave up permanently the instant a
+    # content-changed event arrived before the dropdown had inflated, which
+    # is the NORMAL ordering, not an edge case). It only passed because an
+    # earlier case had already opened the OpMode dropdown once, leaving the
+    # ListView populated and visible, so by the time the off-screen-slot
+    # case ran, a scrollable node already existed on screen and papered over
+    # the bug. From a genuinely cold start it failed. Isolating every case
+    # behind a force-stop closes that hole so no future case can pass by
+    # accident on another case's leftover state.
+    & $adb shell am force-stop $FdsPkg | Out-Null
+    & $adb shell am start -n $FdsActivity | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+function Wait-ForFdsMarker {
+    # Polls FakeDriverStation's logcat (against the buffer, not a live
+    # stream) until $Marker appears or $TimeoutSec elapses. Used to make a
+    # test case's own precondition-setup step (e.g. "select an OpMode
+    # first") deterministic instead of guessing a fixed sleep -- consistent
+    # with this whole project's "don't sleep blindly, react to the actual
+    # event/outcome" rule.
+    param([string]$Marker, [int]$TimeoutSec = 6)
+    $elapsedMs = 0
+    $stepMs = 300
+    while ($elapsedMs -lt ($TimeoutSec * 1000)) {
+        $log = Get-FdsLogcat
+        if ($log -match [regex]::Escape($Marker)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $stepMs
+        $elapsedMs += $stepMs
+    }
+    return $false
 }
 
 function Get-NodeEnabled {
@@ -138,9 +244,9 @@ function Get-NodeEnabled {
     # or $null if no such node is present at all.
     param([string]$Text)
     $remotePath = "/sdcard/window_dump_e2e.xml"
-    & $adb shell uiautomator dump $remotePath 2>$null | Out-Null
+    & $adb shell uiautomator dump $remotePath | Out-Null
     $localPath = Join-Path $env:TEMP "robotreset_e2e_dump.xml"
-    & $adb pull $remotePath $localPath 2>$null | Out-Null
+    & $adb pull $remotePath $localPath | Out-Null
     if (-not (Test-Path $localPath)) {
         return $null
     }
@@ -159,13 +265,21 @@ function Get-NodeEnabled {
 function Invoke-TestCase {
     param(
         [string]$Name,
-        [scriptblock]$Setup,        # runs before firing the chord (e.g. press Home)
-        [int]$ChordKey,             # target key code, or 0 to skip sending a chord
+        [scriptblock]$Setup,        # runs before firing the trigger broadcast (e.g. press Home)
+        [string]$Command = "",      # ChordDecoder.Command name, or "" to skip firing a trigger
+        [int]$Slot = -1,            # only meaningful when $Command -eq "OPMODE_SLOT"
         [int]$WaitSeconds,
         [string[]]$ExpectPresent,   # markers that MUST appear
         [string[]]$ExpectAbsent,    # markers that MUST NOT appear
         [scriptblock]$ExtraCheck    # optional; returns $true/$false, appended to pass/fail
     )
+
+    # Isolation: every case starts from a known, cold FakeDriverStation state
+    # (force-stop + relaunch) rather than trusting whatever a previous case
+    # left behind. See Reset-Fds's doc comment for why this matters -- it is
+    # what closes the test-ordering hole that let a real OpModeSelector bug
+    # hide behind a false 7/7 PASS.
+    Reset-Fds
 
     & $adb logcat -c
 
@@ -173,8 +287,8 @@ function Invoke-TestCase {
         & $Setup
     }
 
-    if ($ChordKey -ne 0) {
-        Send-Chord -TargetKeyCode $ChordKey
+    if ($Command -ne "") {
+        Send-Chord -Command $Command -Slot $Slot
     }
 
     Start-Sleep -Seconds $WaitSeconds
@@ -309,6 +423,11 @@ Start-Sleep -Seconds 2
 # ---------------------------------------------------------------------------
 # 4. Foreground FakeDriverStation
 # ---------------------------------------------------------------------------
+# Every Invoke-TestCase call also force-stops + relaunches FakeDriverStation
+# itself (see Reset-Fds) before its own logic runs, so this step is not the
+# only thing standing between cases -- it just leaves the device in a sane
+# state before the loop starts and if this install/enable sequence is
+# somehow broken, failing here is more diagnosable than inside case 1.
 
 Write-Host "Launching FakeDriverStation..."
 & $adb shell am start -n $FdsActivity | Out-Null
@@ -322,50 +441,74 @@ Write-Host ""
 Write-Host "=== Running test cases ==="
 Write-Host ""
 
-# Test 1: Ctrl+Alt+F1 while INIT is still disabled (no OpMode selected yet).
+# Test 1: INIT trigger while INIT is still disabled (no OpMode selected yet).
 # Fail-safe property (Gotcha 3): clicking a disabled node must be a no-op.
-Invoke-TestCase -Name "INIT chord while disabled -> no click" `
-    -ChordKey $KC_F1 -WaitSeconds 2 `
+Invoke-TestCase -Name "INIT trigger while disabled -> no click" `
+    -Command "INIT" -WaitSeconds 2 `
     -ExpectAbsent @("INIT_CLICKED")
 
-# Test 2: Ctrl+Alt+F5 selects OpMode slot 0 (visible on first screen), and
+# Test 2: OPMODE_SLOT 0 selects OpMode slot 0 (visible on first screen), and
 # INIT should become enabled as a result.
-Invoke-TestCase -Name "OpMode slot 0 (F5) select -> OPMODE_SELECTED + INIT enabled" `
-    -ChordKey $KC_F5 -WaitSeconds 3 `
+Invoke-TestCase -Name "OpMode slot 0 select -> OPMODE_SELECTED + INIT enabled" `
+    -Command "OPMODE_SLOT" -Slot 0 -WaitSeconds 3 `
     -ExpectPresent @("OPMODE_SELECTED:OpMode Slot 0") `
     -ExtraCheck { Get-NodeEnabled -Text "INIT" }
 
-# Test 3: Ctrl+Alt+F8 selects OpMode slot 3, which is placed off-screen in
-# FakeDriverStation's list (see MainActivity.OPMODE_ENTRIES) so this only
-# succeeds if the resolver's scroll-and-match path actually scrolls.
+# Test 3: OPMODE_SLOT 3 selects a slot placed off-screen in FakeDriverStation's
+# list (see MainActivity.OPMODE_ENTRIES) so this only succeeds if the
+# resolver's scroll-and-match path actually scrolls.
 # Long wait: scroll-and-match needs the list-populate delay (~900ms) PLUS
 # however many bounded ACTION_SCROLL_FORWARD + rescan cycles it takes.
-Invoke-TestCase -Name "OpMode slot 3 (F8, off-screen) select -> scroll-and-match" `
-    -ChordKey $KC_F8 -WaitSeconds 6 `
+Invoke-TestCase -Name "OpMode slot 3 (off-screen) select -> scroll-and-match" `
+    -Command "OPMODE_SLOT" -Slot 3 -WaitSeconds 6 `
     -ExpectPresent @("OPMODE_SELECTED:OpMode Slot 3")
 
-# Test 4: Ctrl+Alt+F1 again, now that an OpMode has been selected and INIT
+# Test 4: INIT trigger again, now that an OpMode has been selected and INIT
 # should be enabled.
-Invoke-TestCase -Name "INIT chord while enabled -> INIT_CLICKED" `
-    -ChordKey $KC_F1 -WaitSeconds 2 `
-    -ExpectPresent @("INIT_CLICKED")
+#
+# This case genuinely depends on an OpMode having been selected first --
+# that's what enables INIT in FakeDriverStation (see MainActivity.
+# onOpModeSelected). Before per-case isolation existed, this silently rode
+# on test 2's leftover selection. Now that Reset-Fds force-stops
+# FakeDriverStation before every case (including this one), that
+# precondition no longer holds implicitly, so it is established explicitly
+# here: -Setup fires OPMODE_SLOT 0 and polls logcat (Wait-ForFdsMarker, not
+# a blind sleep) until FakeDriverStation confirms OPMODE_SELECTED, before
+# Invoke-TestCase goes on to fire the real INIT trigger under test. The
+# selection marker is asserted present too, so a silent precondition
+# failure shows up as a specific missing marker rather than a confusing
+# INIT_CLICKED miss.
+Invoke-TestCase -Name "INIT trigger while enabled -> INIT_CLICKED" `
+    -Setup {
+        Send-Chord -Command "OPMODE_SLOT" -Slot 0
+        $selected = Wait-ForFdsMarker -Marker "OPMODE_SELECTED:OpMode Slot 0" -TimeoutSec 6
+        if (-not $selected) {
+            Write-Host "       WARNING: precondition OpMode selection did not confirm within timeout"
+        }
+    } `
+    -Command "INIT" -WaitSeconds 2 `
+    -ExpectPresent @("OPMODE_SELECTED:OpMode Slot 0", "INIT_CLICKED")
 
 # Test 5: START.
-Invoke-TestCase -Name "START chord -> START_CLICKED" `
-    -ChordKey $KC_F2 -WaitSeconds 2 `
+Invoke-TestCase -Name "START trigger -> START_CLICKED" `
+    -Command "START" -WaitSeconds 2 `
     -ExpectPresent @("START_CLICKED")
 
 # Test 6: STOP.
-Invoke-TestCase -Name "STOP chord -> STOP_CLICKED" `
-    -ChordKey $KC_F3 -WaitSeconds 2 `
+Invoke-TestCase -Name "STOP trigger -> STOP_CLICKED" `
+    -Command "STOP" -WaitSeconds 2 `
     -ExpectPresent @("STOP_CLICKED")
 
 # Test 7: negative control. Press Home so FakeDriverStation is NOT the
-# foreground app, then fire a chord. Nothing should happen at all -- the
+# foreground app, then fire a trigger. Nothing should happen at all -- the
 # purest form of the fail-safe property: absent target, nothing happens.
-Invoke-TestCase -Name "Chord while FakeDriverStation not foregrounded -> nothing happens" `
+# (This still exercises real resolution code against a real absent target --
+# it is not weakened by the trigger mechanism change. The only thing not
+# covered here or anywhere in this harness is whether a real hardware chord
+# reaches onKeyEvent in the first place; see the top-of-file comment block.)
+Invoke-TestCase -Name "Trigger while FakeDriverStation not foregrounded -> nothing happens" `
     -Setup { & $adb shell input keyevent $KC_HOME | Out-Null; Start-Sleep -Seconds 1 } `
-    -ChordKey $KC_F2 -WaitSeconds 2 `
+    -Command "START" -WaitSeconds 2 `
     -ExpectAbsent @("INIT_CLICKED", "START_CLICKED", "STOP_CLICKED", "OPMODE_SELECTED")
 
 # Re-foreground FakeDriverStation so the device is left in a sane state for
