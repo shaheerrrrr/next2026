@@ -1,10 +1,13 @@
 package com.next2026.robotreset.ui;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.ListView;
 import android.widget.Switch;
@@ -49,6 +52,14 @@ public final class KeyMonitorActivity extends Activity implements KeyEventLog.Li
         serviceStatusText = findViewById(R.id.service_status_text);
         keyEventList = findViewById(R.id.key_event_list);
         Switch consumeSwitch = findViewById(R.id.consume_switch);
+        Button statusButton = findViewById(R.id.status_button);
+
+        statusButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startActivity(new Intent(KeyMonitorActivity.this, StatusActivity.class));
+            }
+        });
 
         adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new ArrayList<String>());
         keyEventList.setAdapter(adapter);
