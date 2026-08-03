@@ -5,3 +5,6 @@ __pycache__/
 FtcRobotController/
 TeamCode/
 ui_commands.json
+.idea/
+build/
+local.properties
