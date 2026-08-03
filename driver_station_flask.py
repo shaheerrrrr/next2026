@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import queue
 import struct
 import threading
@@ -77,9 +78,243 @@ BTN_DPAD_UP = 1 << 7
 BTN_DPAD_DOWN = 1 << 8
 BTN_DPAD_LEFT = 1 << 9
 BTN_DPAD_RIGHT = 1 << 10
+BTN_UI_CMD = 1 << 11  # 0x0800; docs/protocol.md documents bits 11-15 as unassigned
 
 EVENT_BACKLOG = 500
 LOG_BACKLOG = 240
+
+# Driver Station command chords (INIT/START/STOP). These frames carry no gamepad
+# state at all: BTN_UI_CMD is the only button bit set, and lx carries the chord
+# word `(modifier_byte << 8) | hid_usage_id` instead of stick data. The Feather
+# is a dumb chord emitter, so the chord table lives here (and in ui_commands.json)
+# rather than in firmware, and changing a chord needs no reflash.
+UI_COMMAND_KEYS = ("init", "start", "stop", "opmode")
+UI_COMMAND_CONFIG_FILENAME = "ui_commands.json"
+UI_COMMAND_CONFIG_VERSION = 1
+UI_COMMAND_PULSE_SECONDS = 0.30  # 6 frames at 20 Hz; see run_transmitter for the
+                                  # full redundancy/idempotence contract.
+
+# Real chord defaults, confirmed against the RobotReset phone build on real
+# hardware: ctrl+alt+f1/f2/f3 -> phone clicks INIT/START/STOP, ctrl+alt+f5 ->
+# phone opens the TeleOp OpMode list and selects slot 0 (configured on the
+# phone as "Fable"). All four are editable from the dashboard "Chords..."
+# panel.
+DEFAULT_UI_COMMANDS = {
+    "init": {"label": "INIT", "chord": "ctrl+alt+f1"},
+    "start": {"label": "START", "chord": "ctrl+alt+f2"},
+    "stop": {"label": "STOP", "chord": "ctrl+alt+f3"},
+    "opmode": {"label": "OPMODE", "chord": "ctrl+alt+f5"},
+}
+
+# HID Keyboard/Keypad page (0x07) modifier bits, matching hid_keyboard_report_t.modifier.
+# Left- and right-side modifiers are NOT interchangeable: Android surfaces them as
+# different meta bits (e.g. META_CTRL_LEFT_ON vs META_CTRL_RIGHT_ON).
+HID_MODIFIER_NAMES = {
+    "ctrl": 0x01, "lctrl": 0x01, "control": 0x01,
+    "shift": 0x02, "lshift": 0x02,
+    "alt": 0x04, "lalt": 0x04,
+    "gui": 0x08, "lgui": 0x08, "meta": 0x08, "win": 0x08, "cmd": 0x08,
+    "rctrl": 0x10, "rshift": 0x20, "ralt": 0x40, "altgr": 0x40, "rgui": 0x80,
+}
+
+
+def _build_hid_key_names():
+    names = {}
+    for index, char in enumerate("abcdefghijklmnopqrstuvwxyz"):
+        names[char] = 0x04 + index  # a=0x04 .. z=0x1D
+    for index, char in enumerate("123456789"):
+        names[char] = 0x1E + index  # 1=0x1E .. 9=0x26
+    names["0"] = 0x27
+    for number in range(1, 13):
+        names[f"f{number}"] = 0x39 + number  # F1=0x3A .. F12=0x45
+    for number in range(13, 25):
+        names[f"f{number}"] = 0x68 + (number - 13)  # F13=0x68 .. F24=0x73
+    names.update({
+        "enter": 0x28, "return": 0x28,
+        "escape": 0x29, "esc": 0x29,
+        "backspace": 0x2A, "tab": 0x2B, "space": 0x2C,
+        "minus": 0x2D, "equal": 0x2E,
+        "leftbracket": 0x2F, "rightbracket": 0x30, "backslash": 0x31,
+        "semicolon": 0x33, "apostrophe": 0x34, "grave": 0x35,
+        "comma": 0x36, "period": 0x37, "slash": 0x38, "capslock": 0x39,
+        "printscreen": 0x46, "scrolllock": 0x47, "pause": 0x48,
+        "insert": 0x49, "home": 0x4A, "pageup": 0x4B,
+        "delete": 0x4C, "end": 0x4D, "pagedown": 0x4E,
+        "right": 0x4F, "left": 0x50, "down": 0x51, "up": 0x52,
+    })
+    return names
+
+
+HID_KEY_NAMES = _build_hid_key_names()
+
+
+def encode_chord(modifiers, key_usage):
+    return ((modifiers & 0xFF) << 8) | (key_usage & 0xFF)
+
+
+def word_to_i16(word):
+    """Reinterpret a 16-bit chord word as the signed value the packed `lx`
+    field will carry. PACK_FMT_NO_CHECKSUM types lx as signed ('h'); packing an
+    out-of-range int raises struct.error, which would kill the transmitter
+    thread and silently stop all tele-op. Any chord using a right-side GUI
+    modifier (0x80) produces a word >= 0x8000, so this reinterpretation is not
+    optional. The Feather reads the same bytes back with readU16() and is
+    unaffected by how the host chose to interpret the sign."""
+    word &= 0xFFFF
+    return word - 0x10000 if word >= 0x8000 else word
+
+
+def parse_chord(spec):
+    """Parse a chord spec into (modifiers, key_usage, canonical_text).
+
+    Accepts a string like "ctrl+alt+f1" (last token is the key, earlier
+    tokens are modifiers) or a dict {"modifiers": [...], "key": "..."} /
+    {"modifiers": <int>, "key": <int>} as a raw numeric escape hatch.
+    Raises ValueError naming the offending token on any problem.
+    """
+    if isinstance(spec, dict):
+        raw_modifiers = spec.get("modifiers", [])
+        raw_key = spec.get("key")
+        if raw_key is None:
+            raise ValueError("chord is missing a key")
+        if isinstance(raw_modifiers, int):
+            modifiers = raw_modifiers & 0xFF
+        else:
+            modifiers = 0
+            for token in raw_modifiers:
+                token = str(token).strip().lower()
+                if token not in HID_MODIFIER_NAMES:
+                    raise ValueError(f"unknown modifier '{token}'")
+                modifiers |= HID_MODIFIER_NAMES[token]
+        if isinstance(raw_key, int):
+            key_usage = raw_key & 0xFF
+        else:
+            token = str(raw_key).strip().lower()
+            if token not in HID_KEY_NAMES:
+                raise ValueError(f"unknown key '{token}'")
+            key_usage = HID_KEY_NAMES[token]
+    else:
+        text = str(spec).strip().lower()
+        if not text:
+            raise ValueError("chord is empty")
+        tokens = [token.strip() for token in text.split("+") if token.strip()]
+        if not tokens:
+            raise ValueError("chord is empty")
+        *modifier_tokens, key_token = tokens
+        modifiers = 0
+        for token in modifier_tokens:
+            if token not in HID_MODIFIER_NAMES:
+                raise ValueError(f"unknown modifier '{token}'")
+            modifiers |= HID_MODIFIER_NAMES[token]
+        if key_token not in HID_KEY_NAMES:
+            raise ValueError(f"unknown key '{key_token}'")
+        key_usage = HID_KEY_NAMES[key_token]
+
+    if key_usage == 0:
+        raise ValueError("key usage 0 is 'no key' and would be a no-op chord")
+
+    modifier_order = ("ctrl", "shift", "alt", "gui", "rctrl", "rshift", "ralt", "rgui")
+    key_name = next((name for name, usage in HID_KEY_NAMES.items() if usage == key_usage), None)
+    parts = [name for name in modifier_order if HID_MODIFIER_NAMES[name] & modifiers]
+    canonical_text = "+".join(parts + [key_name or f"0x{key_usage:02x}"])
+    return modifiers, key_usage, canonical_text
+
+
+def build_ui_commands(raw):
+    """Validate a raw {command: {label, chord}} mapping into the resolved,
+    wire-ready form: {command: {label, chord, modifiers, key, word}}.
+    Raises ValueError naming the offending command on any problem."""
+    if not isinstance(raw, dict):
+        raise ValueError("commands must be an object")
+    resolved = {}
+    for command_key in UI_COMMAND_KEYS:
+        entry = raw.get(command_key)
+        if not isinstance(entry, dict):
+            raise ValueError(f"missing entry for '{command_key}'")
+        chord_spec = entry.get("chord")
+        if chord_spec is None:
+            raise ValueError(f"'{command_key}' is missing a chord")
+        try:
+            modifiers, key_usage, canonical_text = parse_chord(chord_spec)
+        except ValueError as exc:
+            raise ValueError(f"'{command_key}': {exc}") from exc
+        label = str(entry.get("label") or DEFAULT_UI_COMMANDS[command_key]["label"])
+        resolved[command_key] = {
+            "label": label,
+            "chord": canonical_text,
+            "modifiers": modifiers,
+            "key": key_usage,
+            "word": encode_chord(modifiers, key_usage),
+        }
+    return resolved
+
+
+def resolve_ui_commands_path(explicit):
+    if explicit:
+        return os.path.abspath(explicit)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), UI_COMMAND_CONFIG_FILENAME)
+
+
+def load_ui_commands(path):
+    """Load and validate the Driver Station command chord config.
+    Never raises: a bad or missing config file must not stop a driver
+    station from driving. Returns (resolved_config, error_text)."""
+    defaults = build_ui_commands(DEFAULT_UI_COMMANDS)
+
+    if not os.path.exists(path):
+        return defaults, ""
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return defaults, f"Failed to read {path}: {exc}. Using defaults."
+
+    if not isinstance(data, dict):
+        return defaults, f"{path} does not contain a JSON object. Using defaults."
+
+    raw_commands = data.get("commands", data)
+    if not isinstance(raw_commands, dict):
+        return defaults, f"{path} has no usable 'commands' object. Using defaults."
+
+    resolved = dict(defaults)
+    fallback_notes = []
+    for command_key in UI_COMMAND_KEYS:
+        entry = raw_commands.get(command_key)
+        if entry is None:
+            continue
+        try:
+            one = build_ui_commands({**DEFAULT_UI_COMMANDS, command_key: entry})
+        except ValueError as exc:
+            fallback_notes.append(f"{command_key} ({exc}), using default")
+            continue
+        resolved[command_key] = one[command_key]
+
+    error_text = f"Problems in {path}: " + "; ".join(fallback_notes) if fallback_notes else ""
+    return resolved, error_text
+
+
+def save_ui_commands(path, resolved):
+    """Atomically write the operator-facing chord config. Only the label and
+    canonical chord text are persisted -- never the derived modifiers/key/word
+    -- so the file on disk cannot go internally inconsistent. Returns
+    (ok, error_text)."""
+    payload = {
+        "version": UI_COMMAND_CONFIG_VERSION,
+        "commands": {
+            key: {"label": resolved[key]["label"], "chord": resolved[key]["chord"]}
+            for key in UI_COMMAND_KEYS
+        },
+    }
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        return False, f"Failed to write {path}: {exc}"
+    return True, ""
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -460,6 +695,61 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--accent);
       color: #06100a;
       border-color: var(--accent);
+    }
+
+    button.action.command {
+      background: var(--panel-2);
+      letter-spacing: 0.04em;
+    }
+
+    button.action.command:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    button.action.command.armed {
+      background: var(--accent);
+      color: #06100a;
+      border-color: var(--accent);
+    }
+
+    .chord-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .chord-row {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr) 150px;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .chord-name {
+      color: var(--text);
+      font-weight: 780;
+      padding-bottom: 9px;
+    }
+
+    .chord-encoded {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      padding-bottom: 9px;
+      font-size: 12px;
+    }
+
+    .chord-error {
+      color: #ff9a8a;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 900px) {
+      .chord-row { grid-template-columns: 1fr; }
     }
 
     .terminal {
@@ -866,6 +1156,11 @@ INDEX_HTML = r"""<!doctype html>
           <h2 id="liveTitle">Flash Live Control</h2>
           <div class="actions">
             <button class="action primary" id="driver1Btn">Register Driver 1</button>
+            <button class="action command" data-ui-command="init" id="uiCmdInitBtn">INIT</button>
+            <button class="action command" data-ui-command="start" id="uiCmdStartBtn">START</button>
+            <button class="action command" data-ui-command="stop" id="uiCmdStopBtn">STOP</button>
+            <button class="action command" data-ui-command="opmode" id="uiCmdOpmodeBtn">OPMODE</button>
+            <button class="action" id="uiCmdSettingsBtn">Chords...</button>
           </div>
         </div>
         <div class="content">
@@ -901,6 +1196,10 @@ INDEX_HTML = r"""<!doctype html>
             <div class="btn-state" id="triangle">Triangle / Y</div>
             <div class="btn-state" id="leftBumper">L1 / LB</div>
             <div class="btn-state" id="rightBumper">R1 / RB</div>
+          </div>
+
+          <div class="button-grid" id="uiCommandStateRow" style="margin-top: 12px;">
+            <div class="btn-state" id="uiCmdState">DS Command --</div>
           </div>
 
           <div id="solControls" class="hidden">
@@ -1038,6 +1337,51 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="uiCommandModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h2>Driver Station Command Chords</h2>
+          <div class="label">Each button makes Fable's Feather emit one USB keyboard chord into the Driver Station phone. Use names like ctrl+alt+f1, f5, or shift+enter.</div>
+        </div>
+        <button class="action" id="uiCmdCloseBtn">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="chord-grid">
+          <div class="chord-row">
+            <div class="chord-name">INIT</div>
+            <div class="field-input"><label>Chord</label><input id="uiCmdInitChord" placeholder="ctrl+alt+f1"></div>
+            <div class="chord-encoded" id="uiCmdInitWord">--</div>
+          </div>
+          <div class="chord-row">
+            <div class="chord-name">START</div>
+            <div class="field-input"><label>Chord</label><input id="uiCmdStartChord" placeholder="ctrl+alt+f2"></div>
+            <div class="chord-encoded" id="uiCmdStartWord">--</div>
+          </div>
+          <div class="chord-row">
+            <div class="chord-name">STOP</div>
+            <div class="field-input"><label>Chord</label><input id="uiCmdStopChord" placeholder="ctrl+alt+f3"></div>
+            <div class="chord-encoded" id="uiCmdStopWord">--</div>
+          </div>
+          <div class="chord-row">
+            <div class="chord-name">OPMODE</div>
+            <div class="field-input"><label>Chord</label><input id="uiCmdOpmodeChord" placeholder="ctrl+alt+f5"></div>
+            <div class="chord-encoded" id="uiCmdOpmodeWord">--</div>
+          </div>
+        </div>
+        <div class="chord-error hidden" id="uiCmdError"></div>
+        <div class="label" id="uiCmdPath" style="margin-top: 12px;"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="action" id="uiCmdDefaultsBtn">Restore Defaults</button>
+        <div class="right">
+          <button class="action" id="uiCmdCancelBtn">Cancel</button>
+          <button class="action primary" id="uiCmdSaveBtn">Save Chords</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const ROBOTS = {
@@ -1049,6 +1393,15 @@ INDEX_HTML = r"""<!doctype html>
     const logs = { flash: [], fable: [], sol: [] };
     const latestByRobot = {};
     const el = id => document.getElementById(id);
+    const UI_COMMAND_KEYS = ['init', 'start', 'stop', 'opmode'];
+    let uiCommands = null;
+
+    function uiCmdId(prefix, key) {
+      return `${prefix}${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+    }
+    function hexWord(word) {
+      return `0x${Number(word).toString(16).toUpperCase().padStart(4, '0')}`;
+    }
     const FABLE_FIELD_METERS = __FABLE_FIELD_METERS__;
     const FABLE_TILE_LAYERS = {
       street: {
@@ -1307,6 +1660,39 @@ INDEX_HTML = r"""<!doctype html>
       el(id).classList.toggle('active', Boolean(active));
     }
 
+    function applyUiCommands(payload) {
+      if (!payload || !payload.commands) return;
+      uiCommands = payload.commands;
+      for (const key of UI_COMMAND_KEYS) {
+        const entry = uiCommands[key];
+        if (!entry) continue;
+        el(uiCmdId('uiCmd', key) + 'Btn').textContent = entry.label;
+        el(uiCmdId('uiCmd', key) + 'Chord').value = entry.chord;
+        el(uiCmdId('uiCmd', key) + 'Word').textContent =
+          `${hexWord(entry.word)}  mod ${hexWord(entry.modifiers).slice(2)} key ${hexWord(entry.key).slice(2)}`;
+      }
+      el('uiCmdPath').textContent = payload.path ? `Saved to ${payload.path}` : '';
+      if (payload.error) {
+        el('uiCmdError').textContent = payload.error;
+        el('uiCmdError').classList.remove('hidden');
+      } else {
+        el('uiCmdError').classList.add('hidden');
+      }
+      refreshUiCommandAvailability();
+    }
+
+    function refreshUiCommandAvailability() {
+      const enabled = activeRobot === 'fable' || activeRobot === 'flash' || activeRobot === 'sol';
+      for (const key of UI_COMMAND_KEYS) {
+        const button = el(uiCmdId('uiCmd', key) + 'Btn');
+        const entry = uiCommands ? uiCommands[key] : null;
+        button.disabled = !enabled;
+        button.title = enabled
+          ? (entry ? `${entry.chord} -> ${hexWord(entry.word)}` : '')
+          : 'Driver Station command chords are only wired for Fable, Flash, and Sol.';
+      }
+    }
+
     function setActiveRobot(robotKey, fromServer = false) {
       activeRobot = robotKey;
       setAccent(robotKey);
@@ -1337,6 +1723,7 @@ INDEX_HTML = r"""<!doctype html>
 
       renderLog();
       renderLatest(latestByRobot[robotKey]);
+      refreshUiCommandAvailability();
 
       if (!fromServer) {
         fetch(`/api/robot/${robotKey}`, { method: 'POST' }).catch(() => {});
@@ -1594,6 +1981,53 @@ INDEX_HTML = r"""<!doctype html>
       closeFableCalibrationModal();
     }
 
+    function openUiCommandModal() {
+      if (uiCommands) {
+        for (const key of UI_COMMAND_KEYS) {
+          const entry = uiCommands[key];
+          if (entry) el(uiCmdId('uiCmd', key) + 'Chord').value = entry.chord;
+        }
+      }
+      el('uiCmdError').classList.add('hidden');
+      el('uiCommandModal').classList.remove('hidden');
+    }
+
+    function closeUiCommandModal() {
+      el('uiCommandModal').classList.add('hidden');
+    }
+
+    async function saveUiCommandsFromInputs() {
+      const commands = {};
+      for (const key of UI_COMMAND_KEYS) {
+        const label = uiCommands && uiCommands[key] ? uiCommands[key].label : key.toUpperCase();
+        commands[key] = { label, chord: el(uiCmdId('uiCmd', key) + 'Chord').value };
+      }
+      try {
+        const response = await fetch('/api/ui-commands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ commands })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!payload.ok) {
+          el('uiCmdError').textContent = payload.error || 'Failed to save chords.';
+          el('uiCmdError').classList.remove('hidden');
+          return;
+        }
+        applyUiCommands(payload);
+        closeUiCommandModal();
+      } catch (exc) {
+        el('uiCmdError').textContent = 'Failed to reach the driver station server.';
+        el('uiCmdError').classList.remove('hidden');
+      }
+    }
+
+    function restoreUiCommandDefaults() {
+      el('uiCmdInitChord').value = 'ctrl+alt+f1';
+      el('uiCmdStartChord').value = 'f1';
+      el('uiCmdStopChord').value = 'ctrl+alt+f5';
+    }
+
     function currentCalibrationInputs() {
       const calibration = {};
       let complete = true;
@@ -1667,7 +2101,8 @@ INDEX_HTML = r"""<!doctype html>
         `lt=${String(frame.lt).padStart(4, ' ')} rt=${String(frame.rt).padStart(4, ' ')} ` +
         `a=${frame.cross ? 1 : 0} b=${frame.circle ? 1 : 0} x=${frame.square ? 1 : 0} y=${frame.triangle ? 1 : 0} ` +
         `l1=${frame.left_bumper ? 1 : 0} r1=${frame.right_bumper ? 1 : 0} ` +
-        `dpad=${frame.dpad_up ? 'U' : '-'}${frame.dpad_down ? 'D' : '-'}${frame.dpad_left ? 'L' : '-'}${frame.dpad_right ? 'R' : '-'}`
+        `dpad=${frame.dpad_up ? 'U' : '-'}${frame.dpad_down ? 'D' : '-'}${frame.dpad_left ? 'L' : '-'}${frame.dpad_right ? 'R' : '-'}` +
+        (frame.injected_ui_command ? ` uicmd=${frame.injected_ui_command}:${hexWord(frame.ui_command_word)}` : '')
       );
     }
 
@@ -1676,7 +2111,7 @@ INDEX_HTML = r"""<!doctype html>
       term.textContent = '';
       for (const item of logs[activeRobot]) {
         const line = document.createElement('div');
-        if (item.injected_driver1) line.className = 'pulse';
+        if (item.injected_driver1 || item.injected_ui_command) line.className = 'pulse';
         line.textContent = frameLine(item);
         term.appendChild(line);
       }
@@ -1690,7 +2125,7 @@ INDEX_HTML = r"""<!doctype html>
       latestByRobot[key] = frame;
       if (key === activeRobot && !paused) {
         const line = document.createElement('div');
-        if (frame.injected_driver1) line.className = 'pulse';
+        if (frame.injected_driver1 || frame.injected_ui_command) line.className = 'pulse';
         line.textContent = frameLine(frame);
         el('terminal').appendChild(line);
         while (el('terminal').childNodes.length > 1200) el('terminal').removeChild(el('terminal').firstChild);
@@ -1729,6 +2164,11 @@ INDEX_HTML = r"""<!doctype html>
       setButton('dpadDown', frame.dpad_down);
       setButton('dpadLeft', frame.dpad_left);
       setButton('dpadRight', frame.dpad_right);
+
+      setButton('uiCmdState', Boolean(frame.injected_ui_command));
+      el('uiCmdState').textContent = frame.injected_ui_command
+        ? `DS ${frame.injected_ui_command.toUpperCase()}`
+        : 'DS Command --';
     }
 
     function applyStatus(status) {
@@ -1736,6 +2176,7 @@ INDEX_HTML = r"""<!doctype html>
         setActiveRobot(status.active_robot, true);
       }
       if (status.fable_nav) updateFableNav(status.fable_nav);
+      if (status.ui_commands) applyUiCommands(status.ui_commands);
       setPill('gamepadPill', status.gamepad_ok ? 'ok' : 'bad', status.gamepad_ok ? 'Gamepad OK' : 'Gamepad Down');
       setPill('serialPill', status.serial_ok ? 'ok' : 'bad', status.serial_ok ? 'Serial OK' : 'Serial Down');
       if (status.error) {
@@ -1764,6 +2205,9 @@ INDEX_HTML = r"""<!doctype html>
       source.addEventListener('fable_nav', e => {
         lastEventAt = Date.now();
         updateFableNav(JSON.parse(e.data));
+      });
+      source.addEventListener('ui_commands', e => {
+        applyUiCommands(JSON.parse(e.data));
       });
       source.addEventListener('notice', e => {
         const line = document.createElement('div');
@@ -1799,6 +2243,37 @@ INDEX_HTML = r"""<!doctype html>
         setTimeout(() => { el('driver1Btn').disabled = false; }, 900);
       }
     });
+
+    document.querySelectorAll('[data-ui-command]').forEach(button => {
+      button.addEventListener('click', async () => {
+        const key = button.dataset.uiCommand;
+        button.disabled = true;
+        button.classList.add('armed');
+        try {
+          const response = await fetch(`/api/ui-command/${key}`, { method: 'POST' });
+          const payload = await response.json().catch(() => ({}));
+          if (!payload.ok) {
+            const line = document.createElement('div');
+            line.className = 'muted';
+            line.textContent = payload.error || 'Driver Station command failed.';
+            el('terminal').appendChild(line);
+          }
+        } finally {
+          // 800ms exceeds the firmware's 600ms cooldown, so a deliberate
+          // second press always produces a second chord.
+          setTimeout(() => {
+            button.classList.remove('armed');
+            refreshUiCommandAvailability();
+          }, 800);
+        }
+      });
+    });
+
+    el('uiCmdSettingsBtn').addEventListener('click', openUiCommandModal);
+    el('uiCmdCloseBtn').addEventListener('click', closeUiCommandModal);
+    el('uiCmdCancelBtn').addEventListener('click', closeUiCommandModal);
+    el('uiCmdSaveBtn').addEventListener('click', saveUiCommandsFromInputs);
+    el('uiCmdDefaultsBtn').addEventListener('click', restoreUiCommandDefaults);
 
     el('fableCalibrateBtn').addEventListener('click', openFableCalibrationModal);
     el('fableCalCloseBtn').addEventListener('click', closeFableCalibrationModal);
@@ -1889,6 +2364,9 @@ INDEX_HTML = r"""<!doctype html>
     refreshTileLayerButtons();
     setActiveRobot('flash', true);
     connectEvents();
+    // /events yields a status snapshot on connect, which already carries
+    // ui_commands; this fetch is only a fallback in case SSE is slow to open.
+    fetch('/api/ui-commands').then(r => r.json()).then(applyUiCommands).catch(() => {});
   </script>
 </body>
 </html>
@@ -1925,6 +2403,13 @@ class SharedState:
         self.hz = 0.0
         self.error = ""
         self.driver1_until = 0.0
+        self.ui_command_until = 0.0
+        self.ui_command_word = 0
+        self.ui_command_key = ""
+        self.ui_command_robot = None
+        self.ui_commands = build_ui_commands(DEFAULT_UI_COMMANDS)
+        self.ui_commands_path = ""
+        self.ui_commands_error = ""
         self.latest_by_robot = {}
         self.logs = {key: deque(maxlen=LOG_BACKLOG) for key in ROBOTS}
         self.fable_nav_serial = None
@@ -1979,21 +2464,10 @@ class SharedState:
                 self.clients.discard(q)
 
     def snapshot(self):
+        # snapshot_unlocked() does its own locking-free read of self.* fields;
+        # this is the only caller that needs to acquire the lock first.
         with self.lock:
-            return {
-                "active_robot": self.active_robot,
-                "serial_ok": self.serial_ok,
-                "gamepad_ok": self.gamepad_ok,
-                "controller_name": self.controller_name,
-                "port": self.port,
-                "baud": self.baud,
-                "hz": self.hz,
-                "sent_count": self.sent_count,
-                "error": self.error,
-                "version": VERSION,
-                "frame_len": FRAME_LEN,
-                "fable_nav": dict(self.fable_nav),
-            }
+            return self.snapshot_unlocked()
 
     def set_status(self, **kwargs):
         with self.lock:
@@ -2016,6 +2490,14 @@ class SharedState:
             "version": VERSION,
             "frame_len": FRAME_LEN,
             "fable_nav": dict(self.fable_nav),
+            # Same shape as snapshot_ui_commands() -- {commands, path, error} --
+            # so both the SSE "status" event and the "ui_commands" event feed
+            # the same applyUiCommands() on the dashboard.
+            "ui_commands": {
+                "commands": {key: dict(value) for key, value in self.ui_commands.items()},
+                "path": self.ui_commands_path,
+                "error": self.ui_commands_error,
+            },
         }
 
     def set_active_robot(self, robot_key):
@@ -2034,6 +2516,37 @@ class SharedState:
     def driver1_active(self):
         with self.lock:
             return time.monotonic() < self.driver1_until
+
+    def pulse_ui_command(self, command_key, word, robot_key, seconds=UI_COMMAND_PULSE_SECONDS):
+        with self.lock:
+            # Deliberately assigned, not max()'d like pulse_driver1: a second
+            # command must replace an in-flight chord, never interleave with it.
+            self.ui_command_key = command_key
+            self.ui_command_word = word & 0xFFFF
+            self.ui_command_robot = robot_key
+            self.ui_command_until = time.monotonic() + seconds
+
+    def ui_command_active(self):
+        with self.lock:
+            if time.monotonic() >= self.ui_command_until:
+                return None, 0, None
+            return self.ui_command_key, self.ui_command_word, self.ui_command_robot
+
+    def snapshot_ui_commands(self):
+        with self.lock:
+            return {
+                "commands": {key: dict(value) for key, value in self.ui_commands.items()},
+                "path": self.ui_commands_path,
+                "error": self.ui_commands_error,
+            }
+
+    def set_ui_commands(self, resolved, error=""):
+        with self.lock:
+            self.ui_commands = resolved
+            self.ui_commands_error = error
+        payload = self.snapshot_ui_commands()
+        self.publish("ui_commands", payload)
+        return payload
 
     def record_frame(self, robot_key, payload):
         with self.lock:
@@ -2227,7 +2740,7 @@ def build_frame(seq, target_robot_id, state):
     return frame_without_checksum + bytes([checksum(frame_without_checksum[2:])])
 
 
-def make_frame_payload(seq, robot_key, state, shared, injected_driver1):
+def make_frame_payload(seq, robot_key, state, shared, injected_driver1, injected_ui_command=""):
     buttons = state["buttons"]
     robot = ROBOTS[robot_key]
     return {
@@ -2255,6 +2768,8 @@ def make_frame_payload(seq, robot_key, state, shared, injected_driver1):
         "dpad_left": bool(buttons & BTN_DPAD_LEFT),
         "dpad_right": bool(buttons & BTN_DPAD_RIGHT),
         "injected_driver1": injected_driver1,
+        "injected_ui_command": injected_ui_command or None,
+        "ui_command_word": (state["lx"] & 0xFFFF) if injected_ui_command else 0,
         "sent_count": shared.sent_count,
         "serial_ok": shared.serial_ok,
         "gamepad_ok": shared.gamepad_ok,
@@ -2332,6 +2847,13 @@ def run_transmitter(args, shared):
     try:
         publish_device_status(force=True)
         shared.publish("notice", {"message": f"Protocol v{VERSION}, frame length: {FRAME_LEN} bytes"})
+        with shared.lock:
+            chord_summary = ", ".join(
+                f"{shared.ui_commands[key]['label']}={shared.ui_commands[key]['chord']}"
+                f" (0x{shared.ui_commands[key]['word']:04X})"
+                for key in UI_COMMAND_KEYS
+            )
+        shared.publish("notice", {"message": f"DS command chords: {chord_summary}"})
 
         while True:
             now = time.monotonic()
@@ -2423,6 +2945,27 @@ def run_transmitter(args, shared):
             if injected_driver1:
                 state["buttons"] |= BTN_OPTIONS | BTN_CROSS
 
+            # Placed after the driver1 injection (a command frame wins for its
+            # window) and after the fable_teleop_input_active() check above,
+            # which must see raw controller state -- it reads ly/rx/Circle/
+            # Square, none of which a UI-command frame touches, so pressing
+            # INIT/START/STOP can never cancel the Fable autonomous badge.
+            ui_command_key, ui_command_word, ui_command_robot = shared.ui_command_active()
+            injected_ui_command = ""
+            if ui_command_key and ui_command_robot == robot_key:
+                # Guard against a robot switch mid-pulse: without this, a chord
+                # word routed to Flash or Sol would be read as raw stick data
+                # (see flash.ino/sol.ino, which have no BTN_UI_CMD handling)
+                # and clamp to a full-deflection left stick.
+                injected_ui_command = ui_command_key
+                state["buttons"] = BTN_UI_CMD  # assigned, not OR'd: no gamepad state rides along
+                state["lx"] = word_to_i16(ui_command_word)
+                state["ly"] = 0
+                state["rx"] = 0
+                state["ry"] = 0
+                state["lt"] = 0
+                state["rt"] = 0
+
             frame = build_frame(seq, robot_id, state)
             try:
                 ser.write(frame)
@@ -2430,7 +2973,7 @@ def run_transmitter(args, shared):
                 disconnect_serial(f"Uno serial connection lost: {exc}")
                 continue
 
-            payload = make_frame_payload(seq, robot_key, state, shared, injected_driver1)
+            payload = make_frame_payload(seq, robot_key, state, shared, injected_driver1, injected_ui_command)
             shared.record_frame(robot_key, payload)
             seq = (seq + 1) & 0xFFFF
 
@@ -2576,6 +3119,62 @@ def create_app(shared):
         shared.pulse_driver1()
         return jsonify({"ok": True})
 
+    @app.post("/api/ui-command/<command_key>")
+    def ui_command(command_key):
+        if command_key not in UI_COMMAND_KEYS:
+            return jsonify({"ok": False, "error": "unknown command"}), 404
+        with shared.lock:
+            robot_key = shared.active_robot
+            entry = dict(shared.ui_commands[command_key])
+        # Flash was added here once flash.ino gained the same BTN_UI_CMD
+        # keyboard-HID handling as fable.ino (see flash/flash.ino) -- fully
+        # verified on real hardware. Sol was added once sol.ino gained a
+        # first-pass BTN_UI_CMD implementation too (see sol/sol.ino), via a
+        # different mechanism (a second Report ID on its one AVR HID
+        # interface rather than a second independent interface). SAFETY: for
+        # any robot in this tuple, this gate is only safe once that robot's
+        # physical Feather has actually been reflashed with matching
+        # firmware -- on old firmware, `lx` (which now carries a
+        # modifier+keycode word, not stick data) would be read as a raw,
+        # potentially full-deflection left-stick command. Do not add a robot
+        # here until its board is reflashed and the same Step-0 hardware
+        # check done for Fable has been repeated on it.
+        if robot_key not in ("fable", "flash", "sol"):
+            return jsonify({
+                "ok": False,
+                "error": "Driver Station command chords are only wired for Fable, Flash, and Sol.",
+            }), 409
+        shared.pulse_ui_command(command_key, entry["word"], robot_key)
+        shared.publish("notice", {
+            "message": (
+                f"Driver Station command {entry['label']} -> {entry['chord']} "
+                f"(0x{entry['word']:04X}) to {ROBOTS[robot_key]['name']}"
+            )
+        })
+        return jsonify({
+            "ok": True,
+            "command": command_key,
+            "chord": entry["chord"],
+            "word": entry["word"],
+            "robot": robot_key,
+        })
+
+    @app.get("/api/ui-commands")
+    def get_ui_commands():
+        return jsonify({"ok": True, **shared.snapshot_ui_commands()})
+
+    @app.post("/api/ui-commands")
+    def put_ui_commands():
+        payload = request.get_json(silent=True) or {}
+        try:
+            resolved = build_ui_commands(payload.get("commands", payload))
+        except (ValueError, TypeError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        ok, error = save_ui_commands(shared.ui_commands_path, resolved)
+        if not ok:
+            return jsonify({"ok": False, "error": error}), 500
+        return jsonify({"ok": True, **shared.set_ui_commands(resolved)})
+
     @app.post("/api/fable/target")
     def fable_target():
         payload = request.get_json(silent=True) or {}
@@ -2663,9 +3262,21 @@ def main():
     parser.add_argument("--dpad-down-button", type=int, default=12, help="fallback pygame button index for D-pad down")
     parser.add_argument("--dpad-left-button", type=int, default=13, help="fallback pygame button index for D-pad left")
     parser.add_argument("--dpad-right-button", type=int, default=14, help="fallback pygame button index for D-pad right")
+    parser.add_argument(
+        "--ui-commands",
+        default=None,
+        help="path to the Driver Station command chord config JSON "
+             "(default: ui_commands.json beside this script)",
+    )
     args = parser.parse_args()
 
     shared = SharedState()
+    shared.ui_commands_path = resolve_ui_commands_path(args.ui_commands)
+    config, config_error = load_ui_commands(shared.ui_commands_path)
+    shared.set_ui_commands(config, config_error)
+    if config_error:
+        print(f"UI command config: {config_error}")
+
     app = create_app(shared)
     server_thread = threading.Thread(
         target=lambda: app.run(host=args.web_host, port=args.web_port, threaded=True, use_reloader=False),

@@ -133,6 +133,50 @@ It sends normal gamepad state over its short-range local Wi-Fi connection to
 that robot's REV Control Hub. No LoRa-aware code is required in a normal tele-op
 OpMode.
 
+Fable's Feather additionally presents a second USB HID interface: a boot-layout
+keyboard, used only to emit Driver Station command chords (INIT/START/STOP/
+OpMode-select). The chord is **opaque** to the Feather -- it decodes
+`BTN_UI_CMD` and the raw 16-bit word in `lx` into a HID modifier byte and key
+usage, but has no notion of what chord means "INIT". The desktop owns the
+chord-to-meaning-on-the-phone mapping (which chord to send) and the phone-side
+`RobotReset` AccessibilityService owns the meaning (which UI element that
+chord should click, or which OpMode-slot text to search for). This is why a
+new chord assignment needs no reflash: the Feather is a dumb emitter for
+whatever 16-bit word arrives. Verified end-to-end on real hardware for Fable:
+a real chord produces a real click on the real Driver Station app.
+
+Flash's firmware (`flash/flash.ino`) now has the identical second HID
+interface as a direct port. It has been flashed onto a physical board and is
+fully verified end-to-end on real hardware, same as Fable: real chords
+produce real clicks against Flash's own Driver Station app, with a live
+Robot Controller connection.
+
+Sol (`sol/sol.ino`, Adafruit Feather 32u4) uses a genuinely different USB
+stack (AVR `HID.h`/`PluggableUSB`, not Adafruit_TinyUSB) that only exposes
+one USB HID interface at all. Its keyboard-chord support is implemented as a
+second Report-ID-tagged HID collection multiplexed onto that same interface
+(Report ID 2, alongside the gamepad's Report ID 1) rather than a second
+independent interface -- architecturally distinct from Fable/Flash's
+approach. Tested on real hardware (a Moto E5 Cruise, Android 8.0): Android
+does not split the second Report ID into a separate logical input device the
+way it does Fable/Flash's second interface (one merged `Adafruit Feather
+32u4` device, class bitmask `0x80000143` — `KEYBOARD` set alongside
+`JOYSTICK`/`DPAD`), but real chords reach `onKeyEvent` correctly despite the
+merge, and Sol is now **fully verified end-to-end**: OpMode-select, INIT,
+START, and STOP all produce real clicks against Sol's own Driver Station
+app, with a live Robot Controller connection -- same as Fable and Flash.
+
+Getting from "chord reaches `onKeyEvent`" to "chord actually works" needed
+two fixes, both because AVR's `HID.h` gives `sol.ino` no equivalent of
+TinyUSB's non-blocking `usb_hid.ready()` check (gamepad and keyboard share
+one physical endpoint on this stack; `HID_::SendReport()` blocks for up to
+~500ms if the host isn't draining it), and because this Driver Station
+app's specific button implementation needed accessibility focus set before
+click and, for its icon-only STOP control, a resolver capability able to
+pick the correct one of two overlapping same-bounds clickable views. See
+`robot-reset-app:docs/bring-up.md` ("Multi-robot findings: Flash and Sol")
+for the full detail.
+
 ### 6. Tele-Op Failure Behavior
 
 Each robot receiver has a 250 ms stale-frame timeout. If it has not received a
@@ -142,6 +186,10 @@ released buttons, and zero triggers.
 This protects against a lost LoRa stream and against leaving the previously
 selected robot under a stale command. It only governs HID output. Autonomous
 code already running on a Control Hub can have different stop conditions.
+
+This neutralization on Fable never suppresses a keyboard chord's release
+report: a press and its release are tracked independently of the gamepad
+neutral timeout, so a lost link cannot leave a key latched down on the phone.
 
 ## Multi-Robot Control Model
 

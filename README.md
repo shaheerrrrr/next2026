@@ -56,6 +56,7 @@ or stop the OpMode before shutting down the driver station.
 | Run the driver station on Windows | [Runtime Procedures: Windows](docs/procedures.md#windows-powershell-command) |
 | Identify serial ports | [Runtime Procedures: Find Serial Ports](docs/procedures.md#find-serial-ports) |
 | Register a robot as Driver 1 | [Multi-Robot Operation: Driver Registration](docs/multi-robot.md#driver-registration) |
+| Send INIT/START/STOP to the phone (Fable only) | [Runtime Procedures: Driver Station Command Chords](docs/procedures.md#driver-station-command-chords-fable-only) |
 | Send Fable to a GPS point | [Fable Navigation: Operator Workflow](docs/fable-navigation.md#operator-workflow) |
 | Understand a dashboard status | [Fable Navigation: Status Semantics](docs/fable-navigation.md#status-semantics) |
 | Find what is flashed to a board | [Deployment Reference](docs/deployment.md#deployment-matrix) |
@@ -70,11 +71,12 @@ or stop the OpMode before shutting down the driver station.
 | `driver_station_flask.py` | Controller input, addressed frame generation, serial reconnects, Flask dashboard, map UI, and Fable navigation serial bridge. |
 | `driverstation/driverstation.ino` | Driver-side Uno serial-to-LoRa bridge. |
 | `flash/flash.ino` | Flash's Feather M0 LoRa receiver and USB HID gamepad. |
-| `fable/fable.ino` | Fable's Feather M0 LoRa receiver and USB HID gamepad. |
+| `fable/fable.ino` | Fable's Feather M0 LoRa receiver, USB HID gamepad, and USB HID keyboard for Driver Station command chords. |
 | `sol/sol.ino` | Sol's Feather 32u4 RFM95 LoRa receiver and USB HID gamepad. |
 | `fable_driver_nav_esp32c3/fable_driver_nav_esp32c3.ino` | Driver-side Fable ESP-NOW bridge and status LED. |
 | `fable_robot_nav_esp32c3/fable_robot_nav_esp32c3.ino` | Robot-side GPS reader, ESP-NOW endpoint, telemetry source, and Pico UART producer. |
 | `fable_navigation_bridge/` | Pico UART-to-I2C navigation snapshot bridge. |
+| `ui_commands.json` | Operator-editable Driver Station command chord config (gitignored; generated at runtime, defaults live in `driver_station_flask.py`). |
 | `docs/` | Human and agent-facing system documentation. |
 
 The FTC robot projects are maintained on the `flash`, `fable`, and `sol`

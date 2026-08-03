@@ -54,7 +54,7 @@ branch and verify `git status` before making edits.
 | `driver_station_flask.py` | Desktop controller input, packet assembly, dashboard, serial lifecycle, Fable map, and navigation commands. |
 | `driverstation/driverstation.ino` | Transparent validated serial-to-LoRa forwarding. |
 | `flash/flash.ino` | Flash LoRa filtering and TinyUSB HID output. |
-| `fable/fable.ino` | Fable LoRa filtering and TinyUSB HID output. |
+| `fable/fable.ino` | Fable LoRa filtering, TinyUSB gamepad HID output, and TinyUSB keyboard HID output for Driver Station command chords. |
 | `sol/sol.ino` | Sol LoRa filtering and AVR HID output. |
 | `fable_driver_nav_esp32c3/` | Driver-side serial/ESP-NOW navigation bridge and visible status LED. |
 | `fable_robot_nav_esp32c3/` | Fable GPS ingestion, target state, telemetry, and Pico snapshot producer. |
@@ -78,6 +78,12 @@ branch and verify `git status` before making edits.
   telemetry into the high-rate LoRa gamepad frame without an explicit redesign.
 - Fable's navigation I2C address is `0x42` and its ESP-NOW channel is `1`.
 - Antennas must be attached before intentional LoRa transmission.
+- Only Fable presents a second USB HID interface (a keyboard, alongside its
+  gamepad). Flash and Sol present one HID interface each.
+- `BTN_UI_CMD` (`0x0800`) frames carry a Driver Station command chord (a HID
+  modifier/key pair) in `lx`, not stick data, and must never be addressed to
+  Flash or Sol: neither has `BTN_UI_CMD` handling, and both would read the
+  chord word as a raw, full-deflection left-stick command.
 
 ## Coupled Changes
 
@@ -107,6 +113,26 @@ If a controller control is added or remapped, update the desktop packet source,
 the affected robot's HID report, and the dashboard visualization together.
 Confirm the Android Driver Station interpretation, not only a generic Android
 gamepad tester. Analog FTC trigger fields require analog HID usages.
+
+### Driver Station Command Chords
+
+If the `BTN_UI_CMD` bit, the chord word encoding, the HID modifier/key tables,
+the default chords, the pulse/cooldown timing, or the keyboard HID report
+layout changes, inspect all affected layers:
+
+- `driver_station_flask.py` (chord parsing/encoding, `SharedState`, the
+  transmitter injection, and the `/api/ui-command*` routes)
+- `ui_commands.json` (the on-disk shape it is validated against; do not commit
+  this file itself -- it is gitignored operator state)
+- `fable/fable.ino`
+- `docs/protocol.md`
+- `docs/procedures.md`
+- `docs/multi-robot.md`
+- The `RobotReset` AccessibilityService app on branch `robot-reset-app` in the
+  sibling `next2026` repository, which decodes the resulting key event and is
+  not in this worktree. Its `ChordDecoder` chord table is independent of this
+  repo's `ui_commands.json` defaults; the two are expected to be edited to
+  match, not kept structurally coupled.
 
 ### Fable Navigation Transport
 

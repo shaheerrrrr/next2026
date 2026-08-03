@@ -93,8 +93,10 @@ applied as gamepad state.
 | `0x0100` | `BTN_DPAD_DOWN` | D-pad down | D-pad down |
 | `0x0200` | `BTN_DPAD_LEFT` | D-pad left | D-pad left |
 | `0x0400` | `BTN_DPAD_RIGHT` | D-pad right | D-pad right |
+| `0x0800` | `BTN_UI_CMD` | - | Driver Station command chord (see below) |
 
-Unused upper button bits must be transmitted as zero until assigned.
+Bit `11` is `BTN_UI_CMD`. Bits `12`-`15` remain unassigned and must be
+transmitted as zero.
 
 ### Desktop Controller Normalization
 
@@ -135,13 +137,104 @@ Clicking **Register Driver 1** causes the desktop to set `BTN_OPTIONS` and
 robot. The Feather mappings below produce the empirically verified Android FTC
 Driver Station registration combination.
 
+### Driver Station Command Injection
+
+Clicking **INIT**, **START**, **STOP**, or **OPMODE** on the dashboard sends
+a Driver Station command chord. This is deliberately **not** a command enum:
+the receiving Feather is a dumb chord emitter, so the chord table lives
+entirely on the desktop (`ui_commands.json`, editable from the dashboard's
+"Chords..." panel) rather than in firmware, and changing a chord needs no
+reflash. Fable, Flash, and Sol all decode `BTN_UI_CMD` in firmware, and all
+three are now **fully verified end-to-end** on real hardware: real chords
+produce real clicks against each robot's own Driver Station app, with a live
+Robot Controller connection (confirmed for OpMode-select, INIT, START, and
+STOP on all three).
+
+Sol's Report-ID-multiplexed approach (a second Report ID multiplexed onto
+its single AVR HID interface, rather than a second independent interface
+like Fable/Flash — its USB stack has no equivalent to a second interface) is
+confirmed working despite being architecturally different. On the tested
+phone (a Moto E5 Cruise, Android 8.0/API 26 — notably different
+hardware/OS from Fable/Flash's Samsung Galaxy S20 FE / Android 13 phones),
+the second Report ID does **not** enumerate as a separate logical input
+device the way Fable/Flash's second interface does — `dumpsys input` shows
+one merged `Adafruit Feather 32u4` device whose class bitmask (`0x80000143`)
+has the `KEYBOARD` bit (`0x001`) set alongside `JOYSTICK`/`DPAD`, rather than
+two distinct devices. Despite that, real chords correctly reach `onKeyEvent`
+and produce real clicks. Getting Sol's OpMode-select and STOP to actually
+*work* (not just report success) needed two firmware changes and one
+Android-app-side resolver capability, none of which are Sol-specific USB
+quirks so much as consequences of the 32u4/AVR `HID.h` stack and this
+particular Driver Station app build — see `robot-reset-app:docs/bring-up.md`
+("Multi-robot findings: Flash and Sol") for the full detail:
+
+- AVR's `HID_::SendReport()` blocks the whole `loop()` for up to ~500ms if
+  the host isn't draining the shared gamepad+keyboard endpoint (verified in
+  the installed core's `USBCore.cpp`) — unlike TinyUSB's non-blocking
+  `usb_hid.ready()` check on the M0 boards. `sol.ino` now skips its routine
+  gamepad send while a chord press is outstanding, to reduce contention on
+  that shared endpoint.
+- A resolved, clickable, enabled node can report a successful click while
+  the app's real handler never runs (Android's `ACTION_CLICK` needs
+  `ACTION_ACCESSIBILITY_FOCUS` set first on this Android version, for some
+  widgets) — fixed generally in `RobotResetService`'s resolver.
+- Sol's Driver Station app skin renders STOP as an icon with no accessible
+  text/description/id at all, and has two overlapping clickable controls at
+  identical bounds where only the non-functional one carries a label —
+  handled by a new opt-in `TargetSpec.Kind.TEXT_SIBLING` resolver capability.
+
+When `BTN_UI_CMD` is set:
+
+- `buttons` is exactly `BTN_UI_CMD` -- no other button bit rides along.
+- `lx` carries the chord word `(modifier_byte << 8) | hid_usage_id` using
+  Keyboard/Keypad page (`0x07`) HID usage IDs and the standard HID modifier
+  bitmask (`Left Ctrl 0x01`, `Left Shift 0x02`, `Left Alt 0x04`,
+  `Left GUI 0x08`, right-side variants `0x10`/`0x20`/`0x40`/`0x80`). The word
+  is transmitted in the signed `int16` `lx` field and must be reinterpreted as
+  `uint16` by the receiver; a chord using a right-side GUI modifier produces a
+  word `>= 0x8000`.
+- `ly`, `rx`, `ry`, `lt`, and `rt` are zero.
+
+Default chords, confirmed against the real `RobotReset` Android app on real
+hardware (a full chord → real click on the real Driver Station app, with a
+live Robot Controller connection):
+
+| Command | Default chord | Word | What the phone does |
+| --- | --- | --- | --- |
+| INIT | `ctrl+alt+f1` | `0x053A` | Clicks INIT (only once an OpMode is selected) |
+| START | `ctrl+alt+f2` | `0x053B` | Clicks START |
+| STOP | `ctrl+alt+f3` | `0x053C` | Clicks STOP |
+| OPMODE | `ctrl+alt+f5` | `0x053E` | Opens the OpMode list and selects slot 0 |
+
+All four are operator-editable from the dashboard's "Chords..." panel and
+persisted to `ui_commands.json`. `OPMODE` exists as its own command because
+OpMode selection isn't one of the phone app's three named actions (INIT/
+START/STOP) — it's driven by a separate chord table on the phone
+(`Ctrl+Alt+F5`..`F8` select OpMode slots 0..3), and needs its own dashboard
+control rather than sharing one of the other three.
+
+Earlier bench defaults deliberately mismatched `stop` with the OpMode-select
+chord (`ctrl+alt+f5`) so the raw-chord transport could be verified without a
+dedicated fourth button. That was superseded once the phone-side ids were
+confirmed and this fourth `OPMODE` command was added — the values above are
+the real, currently-correct ones.
+
+The desktop repeats the frame **6 times over 300 ms** (20 Hz) for redundancy
+on the unacknowledged LoRa link. The receiver fires on the **rising edge**
+of `BTN_UI_CMD` with a 600 ms cooldown, so any non-empty subset of those 6
+frames yields exactly one HID key chord. Timing that must hold across the
+whole pipeline: pulse (300 ms) + `STALE_MS` (250 ms) = 550 ms, which is less
+than the firmware cooldown (600 ms), which is less than the dashboard button's
+own 800 ms lockout -- so a deliberate second press always produces a second
+chord, and a stray straggler frame never produces a duplicate.
+
 ## Robot USB HID Reports
 
 The LoRa frame is shared, but HID conversion is local to each robot. These HID
 reports are part of the deployed compatibility contract because Android and FTC
 interpret specific usages and button positions.
 
-### Flash And Fable HID Report
+### Flash And Fable Gamepad HID Report
 
 Flash and Fable use the same packed eight-byte report on Feather M0 boards:
 
@@ -182,6 +275,34 @@ fields. Mapping triggers to buttons does not populate
 
 The descriptor exposes 16 buttons followed by X, Y, Z, Rz, Brake, and
 Accelerator.
+
+### Fable Keyboard HID Report
+
+Fable, and only Fable, presents a **second** USB HID interface: a standard
+boot-layout keyboard, no report ID, used exclusively to emit Driver Station
+command chords. Flash and Sol present a single (gamepad) HID interface each.
+
+```cpp
+typedef struct __attribute__((packed)) {
+  uint8_t modifier;
+  uint8_t reserved;
+  uint8_t keycode[6];
+} lora_keyboard_report_t;
+```
+
+This is byte-identical to the standard HID boot-keyboard report, which is why
+`setBootProtocol(HID_ITF_PROTOCOL_KEYBOARD)` is safe to declare. On receiving
+a rising edge of `BTN_UI_CMD` (subject to the cooldown described above), the
+Feather sends a press report (`modifier` and `keycode[0]` set from the chord
+word) followed by an all-zero release report `40 ms` later. The hold duration
+is two HID intervals -- long enough for Android to register a discrete
+key-down/key-up, far short of Android's ~400 ms auto-repeat delay.
+
+The gamepad descriptor (`desc_hid_report`) and its `sendReport(0, ...)` call
+are untouched by this addition; the keyboard is a second, independent
+`Adafruit_USBD_HID` instance, not a second report ID on the gamepad
+interface. This is why the FTC Driver Station app's gamepad mapping cannot
+change as a result of this feature.
 
 ### Sol HID Report
 
@@ -229,6 +350,11 @@ the right trigger to `accelerator`.
 Every receiver attempts a HID report every 20 ms. If no valid addressed frame
 has been applied for more than 250 ms, all controls are reset to neutral before
 the next report.
+
+On Fable, this neutralization never suppresses a pending Driver Station
+command key release: if the LoRa link drops immediately after a chord's press
+report, the queued release report is still sent once the 40 ms hold elapses,
+so a key can never remain latched down on the phone.
 
 ## Fable Driver C3 Serial Protocol
 
@@ -474,13 +600,16 @@ robots unless the web host is deliberately changed.
 | `GET` | `/api/status` | Current driver-station snapshot |
 | `POST` | `/api/robot/<flash|fable|sol>` | Change active tele-op target |
 | `POST` | `/api/driver1` | Start the registration pulse |
+| `POST` | `/api/ui-command/<init\|start\|stop>` | Start a Driver Station command chord pulse; `409` if the active robot is not Fable |
+| `GET` | `/api/ui-commands` | Current chord config, resolved encodings, config file path, and any load error |
+| `POST` | `/api/ui-commands` | Replace and persist the chord config; `400` on an invalid chord |
 | `POST` | `/api/fable/target` | Accept JSON `{lat, lon}` and send an E7 target |
 | `POST` | `/api/fable/cancel` | Send `CLEAR` and reset desktop navigation state |
 | `GET` | `/events` | Server-Sent Events stream |
 
-SSE event names currently include `status`, `frame`, `fable_nav`, `notice`, and
-`ping`. `ping` is emitted after 15 seconds without another event to keep the
-stream alive.
+SSE event names currently include `status`, `frame`, `fable_nav`, `notice`,
+`ui_commands`, and `ping`. `ping` is emitted after 15 seconds without another
+event to keep the stream alive.
 
 ## Compatibility Rules
 

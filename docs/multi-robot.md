@@ -75,6 +75,14 @@ registration mapping for these phones.
 
 Changing the selected robot later does not erase registration.
 
+Driver Station command chords (INIT/START/STOP/OpMode-select, Fable and
+Flash) are a distinct mechanism from controller registration: registration
+injects gamepad button bits so the phone recognizes a USB controller, while a
+command chord emits a separate USB HID **keyboard** event that an on-phone
+AccessibilityService intercepts to click a specific Driver Station UI
+element. See
+[Runtime Procedures](procedures.md#driver-station-command-chords-fable-only).
+
 ## Control Profiles
 
 ### Flash And Fable
@@ -88,7 +96,34 @@ Flash and Fable receive the complete standard profile:
 - Options when injected for registration
 
 Their Feather M0 firmware and custom HID descriptors are functionally
-equivalent except for compiled robot ID and name.
+equivalent for the gamepad interface, except for compiled robot ID and name.
+Fable's and Flash's Feathers both also present a second USB HID interface (a
+boot-layout keyboard) that emits Driver Station command chords (INIT/START/
+STOP/OpMode-select) when `BTN_UI_CMD` is set — `flash.ino` gained this after
+`fable.ino`, as a direct mechanical port of the same feature, and it has
+since been reflashed onto a physical Flash Feather and is fully verified
+end-to-end on real hardware, same as Fable: OpMode-select, INIT, START, and
+STOP all produce real clicks against Flash's own Driver Station app, with a
+live Robot Controller connection. Sol has a different-in-kind implementation
+too (a second Report ID on its single AVR HID interface, since its USB stack
+has no equivalent to a second independent interface), and it has passed its
+own Step-0 hardware check: Android does not split the second Report ID into
+a separate logical input device the way it does for Fable/Flash's second
+interface (one merged `Adafruit Feather 32u4` device with `KEYBOARD` set
+alongside `JOYSTICK`/`DPAD` in its class bitmask), but a real chord still
+reaches `onKeyEvent` correctly despite that. Sol is now also **fully
+verified end-to-end** on real hardware: OpMode-select, INIT, START, and
+STOP all produce real clicks against Sol's own Driver Station app, with a
+live Robot Controller connection. Getting there also surfaced two firmware
+issues specific to the 32u4/AVR `HID.h` USB stack (fixed in `sol.ino`) and
+a Driver Station app quirk unrelated to any robot's firmware — see
+`robot-reset-app:docs/bring-up.md` ("Multi-robot findings: Flash and Sol")
+for the full detail: AVR's `HID_::SendReport()` is a blocking call with no
+non-blocking readiness check (unlike TinyUSB's `usb_hid.ready()` on the M0
+boards), so Sol's `loop()` now skips its routine gamepad send while a chord
+press is outstanding, to avoid the shared endpoint stalling the
+chord-release timer. See
+[Driver Station Command Injection](protocol.md#driver-station-command-injection).
 
 ### Sol
 

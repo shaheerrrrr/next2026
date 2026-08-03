@@ -148,6 +148,10 @@ python .\driver_station_flask.py `
 
 Replace `COM5` and `COM7` with the Uno and navigation C3 ports.
 
+Add `--ui-commands <path>` to load or save the Driver Station command chord
+config somewhere other than `ui_commands.json` beside the script. It is
+optional; the default location is used automatically.
+
 The terminal should print the dashboard address. Open:
 
 ```text
@@ -189,6 +193,74 @@ this for every robot used in the session:
 The dashboard briefly sends the known working Options plus Cross HID
 combination only to the selected robot. Registering Flash does not register
 Fable or Sol.
+
+## Driver Station Command Chords
+
+Fable's Feather also presents a USB HID keyboard interface used to send a
+keyboard chord into its Driver Station phone, where an Android
+AccessibilityService (`RobotReset`, a separate app/repo, branch
+`robot-reset-app`) resolves and clicks the DS app's INIT, START, STOP, or
+OpMode-select element by UI element, not by screen coordinate. This has been
+verified end-to-end on real hardware for Fable: real chord -> real click on
+the real Driver Station app, with a live Robot Controller connection.
+
+Flash's firmware (`flash.ino`) has since gained the same capability as a
+direct port of Fable's, and the dashboard's **INIT**/**START**/**STOP**/
+**OPMODE** buttons are enabled for Flash too. Flash's physical Feather has
+been reflashed and is **fully verified end-to-end on real hardware**, same as
+Fable: OpMode-select, INIT, START, and STOP all produce real clicks against
+Flash's own Driver Station app, with a live Robot Controller connection
+(Flash's control hub has one registered TeleOp OpMode, "Flash", configured on
+slot 0).
+
+Sol's firmware has a different-in-kind implementation too (a second Report
+ID on its one AVR HID interface, rather than a second independent
+interface), even though Android merges the keyboard usage into the same
+logical input device as the gamepad rather than splitting it out the way
+Fable/Flash's second interface does. Sol is now also **fully verified
+end-to-end on real hardware**, same as Fable and Flash: OpMode-select,
+INIT, START, and STOP all produce real clicks against Sol's own Driver
+Station app, with a live Robot Controller connection. The dashboard's
+INIT/START/STOP/OPMODE buttons are enabled for Sol accordingly -- see
+`deployment.md`'s Sol section, and `robot-reset-app:docs/bring-up.md`
+("Multi-robot findings: Flash and Sol"), for what it took to get there.
+
+1. Select Fable, Flash, or Sol in the dashboard.
+2. Confirm its phone is showing the FTC Driver Station app and that
+   `RobotReset`'s accessibility service is enabled on that phone.
+3. If starting cold (no OpMode selected yet), click **OPMODE** first -- this
+   opens the OpMode list and selects whatever is configured on the phone's
+   Config screen as slot 0. INIT stays disabled on the phone until this has
+   happened, same as operating the DS app by hand.
+4. Click **INIT**, then **START**, then **STOP** as needed.
+5. Watch the transmit log for `uicmd=<command>:0x####` lines confirming the
+   frame went out, and watch the phone for the expected action.
+
+Each button is locked out for 800 ms after a click, which is longer than the
+firmware's internal 600 ms cooldown, so a second deliberate click always
+produces a second chord.
+
+### Editing Chords
+
+Click **Chords...** next to Register Driver 1 to open the chord editor.
+Each entry accepts a `+`-joined chord name such as `ctrl+alt+f1`, `f5`, or
+`shift+enter`; the modal echoes the resolved hex word as you type. **Restore
+Defaults** resets the four input fields without saving; click **Save
+Chords** to persist. Chords are stored in `ui_commands.json` beside
+`driver_station_flask.py` (or the path passed to `--ui-commands`) and survive
+a restart. If that file is missing or partially invalid, the affected
+command falls back to its default and the modal shows the resulting error
+text -- a bad config file never prevents driving.
+
+The shipped defaults (`ctrl+alt+f1` / `ctrl+alt+f2` / `ctrl+alt+f3` /
+`ctrl+alt+f5`) are the real, confirmed-working chords for the current
+`RobotReset` phone build -- INIT/START/STOP/OPMODE respectively. (Earlier
+bench defaults deliberately mismatched `stop` with the OpMode-select chord so
+the raw transport could be verified without a dedicated fourth button; that
+bootstrapping step is done and the defaults now reflect real usage.) If the
+phone-side app's chord table ever changes, re-point these to match --
+`docs/protocol.md`'s "Driver Station Command Injection" section is the
+canonical reference for the current chord table.
 
 ## Tele-Op Operation
 

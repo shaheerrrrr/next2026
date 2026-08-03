@@ -59,6 +59,11 @@ and retries if that named device is temporarily absent. The navigation port is
 optional to the parser, but it should be supplied in normal fleet operation so
 Fable navigation is available.
 
+`--ui-commands <path>` optionally overrides where the Driver Station command
+chord config (INIT/START/STOP/OPMODE) is read from and saved to. It defaults
+to `ui_commands.json` beside `driver_station_flask.py`, is not required, and
+is created automatically on first save.
+
 ## Driver-Side Uno And RFM95W
 
 ### Firmware
@@ -129,6 +134,21 @@ flash/flash.ino
 The Feather's USB data connection and power path must be compatible with the
 phone/OTG arrangement used in the deployed robot.
 
+### Driver Station Command Chords (verified)
+
+Flash's firmware also decodes `BTN_UI_CMD` via a second, genuinely
+independent USB HID interface (the same TinyUSB approach as Fable's, ported
+directly since both boards share the Feather M0 + Adafruit TinyUSB stack).
+**Fully verified on real hardware**, same as Fable: the board enumerates both
+`Adafruit Feather M0` HID interfaces (`KEYBOARD | GAMEPAD | JOYSTICK` and
+`KEYBOARD | ALPHAKEY`), and OpMode-select/INIT/START/STOP chords from the
+dashboard all produce real clicks against Flash's own Driver Station app,
+with a live Robot Controller connection (Flash's control hub currently has a
+single registered TeleOp OpMode, named "Flash", configured on slot 0). The
+real DS app resource-ids matched Fable's exactly (same shared Qualcomm/REV
+APK), confirming those ids are stable across at least these two phones'
+installs.
+
 ## Fable Feather M0
 
 ### Firmware
@@ -154,6 +174,31 @@ fable/fable.ino
 
 The Fable Feather carries only tele-op HID state. GPS targets and telemetry do
 not pass through it.
+
+Fable presents **two** USB HID interfaces: the gamepad shared with Flash, plus
+a second boot-layout keyboard interface used only to emit Driver Station
+command chords (INIT/START/STOP/OpMode-select) into the phone. This has been
+verified end-to-end on real hardware. For the chords to have any effect, the
+phone must have the `RobotReset` AccessibilityService app (a separate
+app/repo, branch `robot-reset-app`) installed, its accessibility service
+enabled, and its `Config` screen pointed at that Driver Station app build's
+real button ids (see `robot-reset-app:docs/bring-up.md` for the discovery
+process and this team's discovered ids). Flash's firmware has the same second
+interface as of a recent update and has been fully verified end-to-end on
+real hardware, same as Fable: real chords produce real clicks against
+Flash's own Driver Station app, with a live Robot Controller connection.
+Sol's
+firmware has a different-in-kind implementation (a second Report ID on its
+single AVR HID interface, since its USB stack has no equivalent to a second
+independent interface). It is now also **fully verified end-to-end** on
+real hardware, same as Fable and Flash: real chords produce real clicks
+against Sol's own Driver Station app, with a live Robot Controller
+connection, even though Android merges the keyboard usage into the same
+logical input device as the gamepad rather than splitting it out the way
+Fable/Flash's second interface does. Getting there needed a firmware fix
+(AVR's blocking HID send, see the Sol section below) and an Android-app-side
+resolver fix, both detailed in `robot-reset-app:docs/bring-up.md`
+("Multi-robot findings: Flash and Sol").
 
 ## Sol Feather 32u4
 
@@ -181,6 +226,31 @@ a separate HID implementation.
 - Feather USB to Sol Android phone through USB OTG
 - Phone Wi-Fi to Sol REV Control Hub
 - 915 MHz antenna attached to Feather radio
+
+### Driver Station Command Chords (fully verified)
+
+Sol's firmware also decodes `BTN_UI_CMD`, appending a second Report-ID HID
+collection (keyboard) onto the same single AVR HID interface the gamepad
+uses. This is architecturally different from Fable/Flash's approach of a
+second, genuinely independent USB interface. Unlike Fable/Flash, the second
+Report ID does **not** produce a separate logical input device —
+`dumpsys input` shows one merged `Adafruit Feather 32u4` device whose class
+bitmask includes `KEYBOARD` alongside `JOYSTICK`/`DPAD` — but a real chord
+still reaches `onKeyEvent` correctly, so the merged-device shape does not
+break delivery in practice. OpMode-select, INIT, START, and STOP are all now
+confirmed producing real clicks against Sol's actual Driver Station app,
+with a live Robot Controller connection. Two things were needed to get from
+"chord reaches `onKeyEvent`" to "chord actually works": a firmware fix
+(`sol.ino`'s `loop()` now skips its routine gamepad send while a chord press
+is outstanding, since AVR's `HID_::SendReport()` is a blocking call — up to
+~500ms — with no non-blocking readiness check on this USB stack, unlike
+TinyUSB's `usb_hid.ready()` on the M0 boards), and an Android-app-side
+resolver fix (`RobotResetService` now sets `ACTION_ACCESSIBILITY_FOCUS`
+before every click, and gained a new opt-in `TargetSpec.Kind.TEXT_SIBLING`
+capability for Sol's Driver Station app skin, whose STOP control is an
+icon with no accessible label sharing its screen bounds with a
+non-functional labeled decoy). Full detail in
+`robot-reset-app:docs/bring-up.md` ("Multi-robot findings: Flash and Sol").
 
 ## Driver-Side Fable Navigation C3
 
