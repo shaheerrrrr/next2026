@@ -2,9 +2,11 @@ package com.next2026.robotreset;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.graphics.Rect;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
 
 import com.next2026.robotreset.config.TargetConfig;
 import com.next2026.robotreset.opmode.OpModeSelector;
@@ -86,6 +88,120 @@ public final class RobotResetService extends AccessibilityService {
             return;
         }
         service.handleCommand(decoded);
+    }
+
+    /**
+     * TESTING HOOK (debug builds only), separate from {@link #dispatchDebugCommand}:
+     * logs every clickable node in the current window's tree (class, view-id,
+     * text, content-description, bounds) instead of driving a chord. Exists
+     * because {@code uiautomator dump} was found to be unreliable against the
+     * Driver Station app's main screen -- it requires the UI to go idle, and
+     * the app's own live-updating telemetry (ping/voltage) means it never
+     * does, so the dump call fails outright. This bypasses that entirely by
+     * reading {@link AccessibilityNodeInfo} directly, the same way {@link
+     * com.next2026.robotreset.resolve.AccessibilityUiTree} does, since a
+     * connected AccessibilityService has no "idle" requirement at all.
+     */
+    static void dispatchDebugDumpTree() {
+        RobotResetService service = instance;
+        if (service == null) {
+            Log.w(TAG, "dispatchDebugDumpTree: no connected RobotResetService instance");
+            return;
+        }
+        service.dumpClickableNodes();
+    }
+
+    private void dumpClickableNodes() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            Log.w(TAG, "dumpClickableNodes: getRootInActiveWindow() returned null");
+            return;
+        }
+        Log.i(TAG, "dumpClickableNodes: begin");
+        dumpNode(root, 0);
+        Log.i(TAG, "dumpClickableNodes: end");
+    }
+
+    private void dumpNode(AccessibilityNodeInfo node, int depth) {
+        if (node == null) {
+            return;
+        }
+        if (node.isClickable()) {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            Log.i(TAG, "CLICKABLE depth=" + depth
+                    + " class=" + node.getClassName()
+                    + " viewId=" + node.getViewIdResourceName()
+                    + " text=" + node.getText()
+                    + " desc=" + node.getContentDescription()
+                    + " enabled=" + node.isEnabled()
+                    + " bounds=" + bounds);
+        }
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            dumpNode(node.getChild(i), depth + 1);
+        }
+    }
+
+    /**
+     * TESTING HOOK (debug builds only): clicks the Nth clickable node found
+     * by the exact same depth-first walk {@link #dumpClickableNodes()} uses
+     * (so the index printed alongside a CLICKABLE log line is stable and
+     * usable here), via the same {@code ACTION_ACCESSIBILITY_FOCUS} +
+     * {@code ACTION_CLICK} sequence production clicks use. Exists to
+     * empirically test which of several nodes sharing ambiguous/absent
+     * text, description, and view-id is the one actually wired to real app
+     * logic -- this is diagnostic only; it does not become part of
+     * production resolution, which still only ever clicks by text/view-id
+     * match, never by position/index.
+     */
+    static void dispatchDebugClickIndex(int targetIndex) {
+        RobotResetService service = instance;
+        if (service == null) {
+            Log.w(TAG, "dispatchDebugClickIndex: no connected RobotResetService instance");
+            return;
+        }
+        service.clickNodeByIndex(targetIndex);
+    }
+
+    private void clickNodeByIndex(int targetIndex) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            Log.w(TAG, "clickNodeByIndex: getRootInActiveWindow() returned null");
+            return;
+        }
+        int[] counter = {0};
+        AccessibilityNodeInfo found = findNodeByIndex(root, targetIndex, counter);
+        if (found == null) {
+            Log.w(TAG, "clickNodeByIndex: index " + targetIndex + " not found, only "
+                    + counter[0] + " clickable node(s) present");
+            return;
+        }
+        found.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
+        boolean clicked = found.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        Log.i(TAG, "clickNodeByIndex: index=" + targetIndex + " clicked=" + clicked
+                + " viewId=" + found.getViewIdResourceName()
+                + " desc=" + found.getContentDescription());
+    }
+
+    private AccessibilityNodeInfo findNodeByIndex(AccessibilityNodeInfo node, int targetIndex, int[] counter) {
+        if (node == null) {
+            return null;
+        }
+        if (node.isClickable()) {
+            if (counter[0] == targetIndex) {
+                return node;
+            }
+            counter[0]++;
+        }
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo result = findNodeByIndex(node.getChild(i), targetIndex, counter);
+            if (result != null) {
+                return result;
+            }
+        }
+        return null;
     }
 
     @Override

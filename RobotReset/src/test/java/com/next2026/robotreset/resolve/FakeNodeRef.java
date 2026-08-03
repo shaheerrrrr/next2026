@@ -15,6 +15,7 @@ public final class FakeNodeRef implements NodeRef {
 
     private final String label;
     private String viewId;
+    private int[] bounds;
     private CharSequence text;
     private boolean clickable;
     private boolean enabled = true;
@@ -35,6 +36,12 @@ public final class FakeNodeRef implements NodeRef {
 
     public FakeNodeRef viewId(String viewId) {
         this.viewId = viewId;
+        return this;
+    }
+
+    /** Unset (null) by default -- tests that don't care about bounds never set it. */
+    public FakeNodeRef bounds(int left, int top, int right, int bottom) {
+        this.bounds = new int[] { left, top, right, bottom };
         return this;
     }
 
@@ -102,6 +109,11 @@ public final class FakeNodeRef implements NodeRef {
     @Override
     public String getViewId() {
         return viewId;
+    }
+
+    @Override
+    public int[] getBoundsInScreen() {
+        return bounds;
     }
 
     @Override

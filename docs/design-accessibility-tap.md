@@ -1,8 +1,12 @@
 # Design: Element-Based Driver Station Control
 
-**This is a design document, not a description of the deployed system.** Nothing
-here is implemented. Current deployed behavior lives in
-[Protocol Reference](protocol.md) and [Runtime Procedures](procedures.md).
+**This is a design document.** It predates the build and is kept for
+rationale, not as a description of current state — the rationale below is
+still accurate, but where it hedges on open questions, those have since been
+settled. For what's actually implemented and verified on real hardware, read
+`bring-up.md`. For the transmitter/firmware side of the system (a separate
+branch, `ftc-lora`), see that branch's `docs/protocol.md` and
+`docs/procedures.md`.
 
 ## Decisions
 

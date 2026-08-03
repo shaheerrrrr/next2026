@@ -1,43 +1,119 @@
 # Bring-Up Runbook: `robot-reset-app` on Fable's Driver Station Phone
 
-Procedural checklist for the first hardware session. Everything before this point was
-verified on an emulator and in JVM unit tests; this document covers what only real
-hardware can answer.
+Procedural checklist for taking this app from source to a working chord-triggered
+INIT/START/STOP/OpMode-select on a real phone. Everything routine (build, unit tests,
+emulator E2E) is covered by `e2e-harness.md`; this document covers what only real
+hardware answers, plus everything discovered doing that for the first time.
 
-Read `robot-reset-app-brief.md` section 7 for why Step 0 exists. Read
-`e2e-harness.md` for what the emulator already proved and what it structurally cannot.
+**Status: all of Step 0 and full bring-up (Sections 4 and 8) have been completed and
+verified on real hardware** — a Samsung Galaxy S20 FE (Android 13 / API 33), a real
+Adafruit Feather M0 running `fable.ino`, a real LoRa link, and the real FTC Driver
+Station app talking to a real Robot Controller. This document was rewritten after that
+session to fold in what was learned, so a fresh setup does not have to rediscover it.
 
-## What is already verified, and what is not
+Read `robot-reset-app-brief.md` section 7 for why Step 0 exists. Read `e2e-harness.md`
+for what the emulator already proved and what it structurally cannot.
+
+---
+
+## 0. System overview — what you need before starting
+
+This repo (branch `robot-reset-app`) builds **one piece** of a larger system: the
+Android app that turns a USB HID keyboard chord into a click on the Driver Station
+app's UI. It does not, by itself, produce a chord. To get an actual chord onto the
+phone you also need the **transmitter side**, which lives on the `ftc-lora` branch of
+this same repo (a separate git worktree, not this one):
+
+```
+Operator / dashboard (driver_station_flask.py, Flask on :8765)
+  -> USB serial 115200
+  -> transmitter board running driverstation.ino
+  -> LoRa 915 MHz broadcast
+  -> Feather M0 running fable.ino, plugged into the Driver Station phone via OTG
+       -> presents a USB gamepad HID interface (tele-op, always on)
+       -> presents a SECOND USB HID interface: a boot-layout keyboard, used only
+          for Driver Station command chords (this is what this app intercepts)
+  -> this app (RobotResetService, an AccessibilityService) intercepts the chord
+     and clicks the corresponding element in the FTC Driver Station app
+```
+
+`fable.ino` is a **dumb chord emitter**: it has no concept of "INIT" or "START", only
+a raw HID modifier byte + key usage decoded out of the LoRa frame's `lx` field. The
+chord-to-meaning mapping lives in two places that must agree with each other:
+
+- **What chord means what command** — `ui_commands.json` / the dashboard's "Chords..."
+  panel, on the `ftc-lora` branch. See `ftc-lora:docs/protocol.md` ("Driver Station
+  Command Injection") and `ftc-lora:docs/procedures.md` ("Driver Station Command
+  Chords") for the transmitter-side reference.
+- **What UI element that chord should click** — `ChordDecoder.java` (fixed mapping,
+  F1/F2/F3 → INIT/START/STOP, F5-F8 → OpMode slots 0-3) and `TargetConfig` (which
+  view-id or text each command resolves to), both in this repo.
+
+If you are setting this up from scratch, get both sides going in this order:
+
+1. Build and install this app (Sections 1-3, 6-7 below).
+2. On the `ftc-lora` worktree: flash `fable.ino` onto the robot's Feather M0 (see
+   `ftc-lora:docs/deployment.md`), and get `driver_station_flask.py` running with a
+   transmitter board attached (see `ftc-lora:docs/procedures.md`).
+3. Do Step 0 (Section 4) to confirm the chord physically reaches the phone.
+4. Discover and apply the real Driver Station app ids (Sections 6-7).
+5. Do full bring-up (Section 8) with a live Robot Controller connection.
+
+## What is verified, and how
 
 | Claim | Status |
 | --- | --- |
-| Element resolution, clickable-ancestor walk, disabled-node no-op | Verified on emulator (7/7 E2E) + 29 JVM unit tests |
+| Element resolution, clickable-ancestor walk, disabled-node no-op | Verified on emulator (7/7 E2E) + JVM unit tests |
 | OpMode dropdown open / wait / scroll / match, from a cold dropdown | Verified on emulator |
 | Fail-safe: absent or disabled target produces no click | Verified on emulator, both negative controls |
 | `FLAG_REQUEST_FILTER_KEY_EVENTS` took effect | Verified — `dumpsys accessibility` reports `KeyboardInterceptor` active |
-| **A real USB HID chord reaches `onKeyEvent`** | **UNVERIFIED — this is Step 0** |
-| **Consuming the chord hides it from the DS app** | **UNVERIFIED** |
-| DS app resource-ids and button text | **GUESSED** — see "Capture the real ids" below |
+| **A real USB HID chord (from the real Feather M0 trigger box, over the real LoRa link) reaches `onKeyEvent`** | **VERIFIED on real hardware** — see Section 4 |
+| Consuming the chord vs. pass-through toggle | Verified — `consumed=true`/`false` behaves correctly per chord match |
+| Real DS app resource-ids (this team's build) | **Verified** — see Section 7 for the discovered ids and how to redo this for a different DS app build |
+| Full chord → real click on the real Driver Station app, with a live Robot Controller connection | **Verified** — OpMode select, INIT, START, STOP all confirmed working end-to-end |
 
-`adb shell input keyevent` cannot substitute for a real keyboard here: it injects via
-`InputManager`, which never reaches the accessibility `KeyboardInterceptor` stage. That is
-why Step 0 requires physical hardware and cannot be automated.
+`adb shell input keyevent` (or `keycombination`) cannot substitute for a real keyboard
+here: it injects via `InputManager`, which never reaches the accessibility
+`KeyboardInterceptor` stage. This is true on the emulator **and** on real hardware —
+it is not an emulator limitation. That is why Step 0 requires physical hardware and a
+real HID device, and cannot be automated with `adb input`.
 
-## The constraint that shapes the whole session
+## The constraints that shape the whole session
 
-**The phone has one USB port.** A keyboard on an OTG adapter and an `adb` cable cannot both
-occupy it. This is the same class of role conflict that killed the `adb shell input tap`
-approach (brief section 3) — but it is only an inconvenience here, not a blocker, because
-the app reports Step 0's result **on its own screen**. The Key Monitor exists precisely so
-the chord test needs no cable.
+**The phone has one USB port.** A keyboard/Feather-M0 on an OTG adapter and an `adb`
+cable cannot both occupy it at the same time. This is the same class of role conflict
+that killed the `adb shell input tap` approach (brief section 3) — but it is only an
+inconvenience here, not a blocker, because the app reports Step 0's result **on its
+own screen** (the Key Monitor exists precisely so the chord test needs no cable), and
+because wireless `adb` covers most of the rest.
 
-Sequence accordingly: install over USB → unplug → attach keyboard → read the result on
-screen → unplug keyboard → reattach USB for the id capture.
+**Wireless `adb` needs re-arming after any full USB disconnect, and it is tied to
+whatever Wi-Fi network the phone is on at the time.** Concretely:
 
-Optional convenience for the later steps: `adb tcpip 5555` then
-`adb connect <phone-ip>:5555` gives you wireless `adb` so you can watch `logcat` while the
-keyboard is attached. It does not survive a reboot and must be re-armed, so treat it as a
-bench convenience only.
+- `adb tcpip 5555` + `adb connect <ip>:5555` only works while the phone is on the
+  same Wi-Fi network/subnet as the machine running `adb`. If the phone switches
+  networks (e.g. from your bench Wi-Fi to the robot's own access point), the old
+  wireless connection goes stale and a fresh `adb connect` to the phone's new IP
+  will time out — you must plug in via USB again to re-arm it (`adb tcpip 5555`),
+  then reconnect wirelessly on the new IP.
+- It does not survive the phone fully losing its USB connection either (not just a
+  reboot) — swapping the cable for an OTG keyboard/Feather and back can be enough to
+  need `adb tcpip 5555` run again.
+- Practical consequence: **the app's own on-screen Key Monitor / Status screens are
+  the reliable fallback, not remote `logcat`.** If you cannot get wireless `adb`
+  connected to the phone (e.g. because it is on the robot's Wi-Fi AP and your laptop
+  isn't), read the results directly off the phone screen instead of fighting the
+  network. This is not a workaround — it's a legitimate primary verification path,
+  and it's why the Key Monitor / Status screens exist.
+- The RobotReset app itself has **no dependency at all** on which Wi-Fi network (if
+  any) the phone is on. It is a local `AccessibilityService` intercepting local USB
+  HID input — no `INTERNET` permission, no network calls. Wi-Fi only matters for (a)
+  your own `adb` debugging convenience, and (b) the Driver Station app's own
+  connection to the Robot Controller, which is unrelated to this app's function.
+
+Sequence accordingly: install over USB → unplug → attach keyboard/Feather M0 → read
+the result on screen (or over wireless `adb` if it's cooperating) → swap back to USB
+when you need to push a new build or pull an id capture.
 
 ## Setup
 
@@ -65,14 +141,27 @@ Accept the "Allow USB debugging" prompt on the phone if it appears.
 & $adb shell getprop ro.product.model
 ```
 
-Record the API level. It determines whether the Android 13+ "restricted setting" applies
-(brief risk 2). The app's `minSdk` is 24, so anything from Android 7 up will install.
+Record the API level. It determines whether the Android 13+ "restricted setting"
+applies (Section 3). The app's `minSdk` is 24, so anything from Android 7 up will
+install. (Confirmed working on Android 13 / API 33, SM-G781U.)
 
-## 2. Install
+## 2. Build and install
 
 ```powershell
+$env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot"
+.\gradlew.bat :RobotReset:assembleDebug
 & $adb install -r RobotReset\build\outputs\apk\debug\RobotReset-debug.apk
 ```
+
+`gradlew.bat` needs a JVM on `PATH` or `JAVA_HOME` set just to *start* — the
+`org.gradle.java.home` in `gradle.properties` only controls which JDK the Gradle
+daemon itself uses once it's running, it doesn't help the wrapper launch. AGP 8.7 /
+Gradle 8.13 require JDK 21; newer JDKs (17 works too) are not compatible with this
+AGP version.
+
+`adb install -r` (reinstall, keep data) preserves the accessibility service's enabled
+state and `TargetConfig`'s `SharedPreferences` overrides across rebuilds — you do not
+need to redo Sections 3, 6, 7 after every code change, only after a fresh install.
 
 ## 3. Enable the accessibility service
 
@@ -81,8 +170,8 @@ Prefer `adb` over the Settings UI. It is more reliable and **bypasses the Androi
 `WRITE_SECURE_SETTINGS`.
 
 **Read the current value first** — this key holds a colon-separated list, and blindly
-overwriting it would silently disable any accessibility service already in use (TalkBack,
-a switch-access tool, etc.):
+overwriting it would silently disable any accessibility service already in use
+(TalkBack, a remote-support tool like AnyDesk/RustDesk, etc.):
 
 ```powershell
 & $adb shell settings get secure enabled_accessibility_services
@@ -95,7 +184,7 @@ If that prints `null` or is empty, set it directly:
 & $adb shell settings put secure accessibility_enabled 1
 ```
 
-If it printed an existing service, append instead, preserving what was there:
+If it printed existing services, append instead, preserving what was there:
 
 ```powershell
 & $adb shell settings put secure enabled_accessibility_services "<existing>:com.next2026.robotreset/com.next2026.robotreset.RobotResetService"
@@ -108,24 +197,34 @@ Confirm it bound:
 & $adb shell dumpsys accessibility | Select-String "Bound services|KeyboardInterceptor"
 ```
 
-You want to see `Robot Reset` among the bound services and `KeyboardInterceptor` in the
-enabled features. `KeyboardInterceptor` is the direct evidence that
-`FLAG_REQUEST_FILTER_KEY_EVENTS` took effect — without it, `onKeyEvent` will never fire and
-Step 0 fails for a reason unrelated to the design.
+You want to see `Robot Reset` among the bound services and `KeyboardInterceptor` in
+the enabled features. `KeyboardInterceptor` is the direct evidence that
+`FLAG_REQUEST_FILTER_KEY_EVENTS` took effect — without it, `onKeyEvent` will never
+fire and Step 0 fails for a reason unrelated to the design.
 
-If you enable it through Settings → Accessibility instead and Android blocks it, clear the
-restriction via Settings → Apps → Robot Reset → ⋮ → **Allow restricted settings**, then
-retry the toggle.
+If you enable it through Settings → Accessibility instead and Android blocks it, clear
+the restriction via Settings → Apps → Robot Reset → ⋮ → **Allow restricted settings**,
+then retry the toggle.
 
-## 4. STEP 0 — the hard gate
+## 4. STEP 0 — the hard gate (confirmed passing)
 
-Open **Robot Reset** from the app drawer. It launches straight into Key Monitor. Confirm the
-header reads **"Accessibility service: RUNNING"** and leave **"Consume matched chords"**
-switched **on**.
+Open **Robot Reset** from the app drawer. It launches straight into Key Monitor. A
+**"Status / Config"** button at the top of that screen opens Status, and from Status,
+**Config** — that's where you'll go in Section 7. Confirm the header reads
+**"Accessibility service: RUNNING"** and leave **"Consume matched chords"** switched
+**on**.
 
-Now unplug USB and attach a USB keyboard through an OTG adapter.
+Now attach the real trigger hardware: unplug USB and plug in the Feather M0 (running
+`fable.ino` from the `ftc-lora` branch) via OTG. It should enumerate as a keyboard —
+you can confirm this from another machine with `adb shell dumpsys input` showing a
+device named `Adafruit Feather M0` with `Classes: KEYBOARD`. If the trigger box has
+just been plugged in, give it a moment; a swap that lands on a bad connection can fail
+to enumerate at all (zero devices, not just zero events) — reseat the OTG connection
+and check again before assuming a software problem.
 
-**Press `Ctrl+Alt+F1`.**
+**Fire `Ctrl+Alt+F1`** from the real trigger chain — either the dashboard's INIT
+button (`ftc-lora:driver_station_flask.py`, see its "Driver Station Command Chords"
+procedures) or an actual USB keyboard's Ctrl+Alt+F1, whichever hardware you have.
 
 Expected: a new line appears at the top of the key event log, roughly
 
@@ -135,32 +234,57 @@ HH:MM:SS.mmm  keyCode=131  meta=0x...  cmd=INIT  consumed=y
 
 Then run two controls:
 
-- **Press bare `F1`** (no modifiers). Expect either no line, or a line with `cmd=NONE`.
+- **Fire bare `F1`** (no modifiers). Expect either no line, or a line with `cmd=NONE`.
   This confirms interception is chord-specific and will not fire on ordinary input.
-- **Press `Ctrl+Alt+F5`.** Expect `cmd=OPMODE_SLOT`.
+- **Fire `Ctrl+Alt+F5`.** Expect `cmd=OPMODE_SLOT`.
 
 ### Decision point
 
 | Outcome | Meaning |
 | --- | --- |
 | Chord lines appear | Step 0 **passes**. The load-bearing assumption holds. Continue. |
-| Nothing appears at all | The trigger mechanism is wrong. **Stop.** Per the brief, most of the design is void and the transport must be reconsidered — do not work around it. |
-| Lines appear but `cmd=NONE` for a chord | The chord arrives but modifiers decode differently on this phone. Report the exact `meta=0x...` value; `ChordDecoder`'s modifier match needs adjusting, which is a small fix. |
+| Nothing appears at all, and the raw device isn't even enumerating (`dumpsys input` shows no `Adafruit Feather M0` / no HID device) | Not a software problem — check the physical OTG connection first. |
+| Device enumerates, but literally zero raw kernel events appear even at `getevent` level when firing a chord | The trigger box isn't actually sending anything. For `fable.ino`-based triggers, check its **own serial console** (open it on a PC, with `DTR`/`RTS` asserted if using a raw serial terminal — some boards gate `Serial` output on DTR) for `"Keyboard HID unavailable; CFG_TUD_HID may be 1."`, and confirm the LoRa link is actually delivering frames (the same serial console prints one line per received frame with an RSSI value). |
+| Nothing appears in `onKeyEvent`, but raw kernel events **do** appear (`getevent` shows `KEY_LEFTCTRL`/`KEY_LEFTALT`/`KEY_F1` etc.) | The trigger mechanism itself is fine; the problem is between the kernel input layer and this app. Re-check Section 3 — `KeyboardInterceptor` must be active. |
+| Lines appear but `cmd=NONE` for a chord you expected to match | The chord arrives but modifiers decode differently on this phone. Note the exact `meta=0x...` value; `ChordDecoder`'s modifier match may need adjusting. |
 
-Note the keycode and meta values in all cases — they are the raw truth about what this
-phone's keyboard actually sends.
+Note the keycode and meta values in all cases — they are the raw truth about what
+this phone's keyboard actually sends.
+
+### If the trigger is a `fable.ino`-based Feather M0, not an off-the-shelf keyboard
+
+Read `fable.ino`'s own comments carefully: it is explicitly "a dumb chord emitter"
+with **no local button input at all** (verified — no `digitalRead` for anything but
+the status LED). It only emits a keyboard HID report when it decodes a valid LoRa
+frame with `BTN_UI_CMD` set. This means:
+
+- You cannot trigger a chord by pressing anything on the Feather M0 board itself.
+- You need the full transmitter chain live: a second board running
+  `driverstation.ino`, wired via USB serial to a computer, running
+  `driver_station_flask.py` with `--port <that board's COM port>`, and the dashboard
+  open in a browser (default `http://127.0.0.1:8765`).
+- The dashboard's INIT/START/STOP/OPMODE buttons (see Section 8) are the practical
+  way to fire specific chords for this test, once `ui_commands.json` has real chords
+  configured (see `ftc-lora:docs/protocol.md`).
 
 ## 5. Confirm consumption
 
-With **"Consume matched chords" on**, foreground the FTC Driver Station app and press
-`Ctrl+Alt+F1`. The DS app should show no sign of the keystroke. Toggling the switch **off**
-and repeating is the comparison case: the event is still logged, but is no longer consumed,
-so anything that does respond to F1 will now see it.
-
-This is the second half of Step 0 and the thing the emulator harness structurally could not
-test.
+With **"Consume matched chords" on**, foreground the FTC Driver Station app and fire
+`Ctrl+Alt+F1`. The DS app should show no sign of the keystroke. Toggling the switch
+**off** and repeating is the comparison case: the event is still logged, but is no
+longer consumed, so anything that does respond to F1 will now see it.
 
 ## 6. Capture the real DS app ids
+
+There are two ways to find real resource-ids. **Use both** — the live dump is
+authoritative for what's actually rendered right now, but it can only show you
+elements that are currently visible (an OpMode list that requires a live Robot
+Controller connection to populate will dump as empty, even though the dialog itself
+is real). Static APK analysis works with **no robot connected at all** and is how the
+real START/STOP ids were actually found in practice, since the OpMode list needed a
+live robot pairing to populate.
+
+### Method A: live `uiautomator` dump
 
 Reattach USB. Foreground the Driver Station app, then:
 
@@ -169,70 +293,295 @@ Reattach USB. Foreground the Driver Station app, then:
 .\tools\uiautomator-dump.ps1                                # dumps + pulls window_dump.xml
 ```
 
-Do this **twice**: once on the main DS screen, and once with the OpMode dropdown open (the
-list contents only exist in the tree while it is open).
+Do this once on the main DS screen, and once with each dropdown/dialog open you care
+about (list contents only exist in the tree while the dialog is open).
 
-In the resulting XML, find the nodes whose `text` is `INIT`, `START`, `STOP`, and the OpMode
-selection control, and record for each:
+In the resulting XML, find nodes by `text`/`content-desc`, and record `resource-id`,
+`class`, `clickable`, and `enabled`. **Watch for Gotcha 2 here**: the node matching
+your target *text* is frequently not the clickable one — e.g. this team's real DS app
+has the "INIT" text as a sibling `TextView` next to the actual clickable
+`ImageButton`, not an ancestor/descendant of it. A `TEXT("INIT")` override would never
+resolve here; you need the `VIEW_ID` of the sibling `ImageButton` directly. Always
+check whether the visually-associated text node is *itself* clickable, or whether you
+need a different node's `resource-id` and/or `content-desc` instead.
 
-- `resource-id`
-- `text`
-- `class`
-- `clickable` — note whether the *matched* node is clickable or whether a parent is
-  (this is Gotcha 2; the resolver already walks up, but it is worth knowing)
-- `enabled` — INIT should read `false` before an OpMode is selected
+### Method B: static APK analysis (works without any robot connection)
 
-The brief *believes* the package is `com.qualcomm.ftcdriverstation` but says to verify rather
-than assume. Verify.
+```powershell
+$pkgPath = (& $adb shell pm path com.qualcomm.ftcdriverstation) -replace '^package:',''
+& $adb pull $pkgPath.Trim() .\ds_app.apk
+
+$aapt = "$env:ANDROID_SDK_ROOT\build-tools\34.0.0\aapt.exe"
+$aapt2 = "$env:ANDROID_SDK_ROOT\build-tools\34.0.0\aapt2.exe"
+
+# List every id/layout resource name the app declares -- release builds often
+# obfuscate/shorten the actual res/*.xml filenames, so names alone don't map to files.
+& $aapt dump resources .\ds_app.apk | Select-String ":id/" | Select-String "button|opmode|stop|start|init"
+
+# Find the real (possibly renamed) file backing a given layout resource:
+& $aapt2 dump resources .\ds_app.apk | Select-String -Context 0,1 "layout/activity_ftc_driver_station"
+# -> e.g. "res/Rz.xml type=XML"
+
+# Dump that file's raw view tree, with hex resource-id references:
+& $aapt dump xmltree .\ds_app.apk res/Rz.xml > ds_layout_dump.txt
+```
+
+`aapt dump xmltree` prints `android:id(...)=@0x7fXXXXXX` rather than symbolic names —
+cross-reference the hex values against the `aapt dump resources` id list from the
+first command to translate. This reveals the **full static structure**, including
+`onClick` handler names and `contentDescription` strings, and — critically — sibling
+elements that a snapshot-in-time `uiautomator` dump won't show if they're not
+currently visible (e.g. the STOP button, which is hidden until an OpMode is running).
+
+Delete `ds_app.apk` and any dump files afterward; they're bench artifacts, not part
+of the app.
+
+### What this team found (FTC Driver Station app, this build)
+
+Recorded here as a worked example, **not** a guarantee for a different season's DS
+app build — always re-verify with the methods above. That said, the FTC Driver
+Station app is the same shared Qualcomm/REV APK across every team, so these are
+likely to still be correct or very close:
+
+| Target | Real id found |
+| --- | --- |
+| INIT | `VIEW_ID` `com.qualcomm.ftcdriverstation:id/buttonInitImageButton` (a sibling `ImageButton`, not an ancestor, of the "INIT" text) |
+| START | `VIEW_ID` `com.qualcomm.ftcdriverstation:id/buttonStartImage` (`content-desc="StartButton"`, `onClick="onClickButtonStart"`) |
+| STOP | `VIEW_ID` `com.qualcomm.ftcdriverstation:id/buttonStop` — a plain top-level `ImageButton`, directly clickable, no wrapper (`onClick="onClickButtonStop"`) |
+| OpMode dropdown | The DS app does **not** have one unified "Select OpMode" control — it has two separate buttons, `buttonAutonomous` and `buttonTeleOp` (`content-desc="AutonomousDropdown"`/`"TeleopDropdown"`). Pick whichever category your chord-selectable OpModes are in; this team used `VIEW_ID` `com.qualcomm.ftcdriverstation:id/buttonTeleOp` |
+| OpMode list rows | Standard system `AlertDialog` list (`android:id/select_dialog_listview`), default row layout — text-matching (the built-in fallback) works fine here, no override needed |
 
 ## 7. Apply the real ids
 
-Every target currently defaults to a text match, which is the more robust guess:
+Every target currently defaults to a text match, which is the more robust guess when
+nothing better is known:
 
-| Target | Current default |
+| Target | Hardcoded default in `TargetConfig` |
 | --- | --- |
 | INIT / START / STOP | `TEXT("INIT")` / `TEXT("START")` / `TEXT("STOP")` |
 | OpMode dropdown | `TEXT("Select OpMode")` |
-| OpMode scroll container | `VIEW_ID("opmode_list_container")` — almost certainly wrong |
+| OpMode scroll container | `VIEW_ID("opmode_list_container")` — not overridable via Config; tolerated by design (see below) |
 | OpMode slot 0..3 names | `"OpMode Slot 0".."OpMode Slot 3"` |
 
-The scroll container being wrong is tolerated by design: `OpModeSelector` falls back to
-scanning for any node with `isScrollable()`, so a miss costs nothing.
+The scroll container being wrong is tolerated by design: `OpModeSelector` falls back
+to scanning for any node with `isScrollable()`, so a miss costs nothing — this worked
+correctly against the real app's standard `AlertDialog` list without any override.
 
-Where the dump disagrees with a default, fix it in the app rather than rebuilding — open
-**Config** and set the override, or set the OpMode slot names to the real OpMode names you
-want on slots 0-3. `TargetConfig` persists these in `SharedPreferences`, which is the whole
-reason a wrong guess is a settings change instead of a new APK.
+Where the dump disagrees with a default, fix it in the app rather than rebuilding:
 
-## 8. Full bring-up
+1. Open **Robot Reset** → **Status / Config** button → **Status** → **Config**.
+2. In the override section: pick the target from the spinner (`init`, `start`,
+   `stop`, `opmode_dropdown`), select the **`VIEW_ID`** radio button, paste the real
+   resource-id, tap **Save Override**.
+3. In the OpMode slot section: type the real registered OpMode name(s) you want
+   reachable by chord into the slot fields (`Ctrl+Alt+F5`=slot 0 through
+   `Ctrl+Alt+F8`=slot 3). You do not need to fill in all four — an unused slot's
+   default placeholder text simply won't match anything, which is a harmless no-op,
+   not an error.
+4. Tap **Save Slots**.
 
-With the keyboard attached and the DS app foregrounded:
+`TargetConfig` persists all of this in `SharedPreferences`, which is the whole reason
+a wrong guess is a settings change instead of a new APK. These overrides survive
+`adb install -r` (reinstall preserving data) but **not** an uninstall or a full data
+clear.
 
-1. `Ctrl+Alt+F5..F8` → the intended OpMode is selected by name.
-2. `Ctrl+Alt+F1` → INIT is pressed (only possible once an OpMode is selected).
-3. `Ctrl+Alt+F2` → START. `Ctrl+Alt+F3` → STOP.
+**View-ids are case-sensitive and there's no validation on the Config screen** — a
+single mistyped character (e.g. `buttonTeleop` instead of `buttonTeleOp`) fails
+silently as `reason=not found` in the resolution log, which looks identical to a
+genuinely wrong id. If a chord that should work produces `not found`, re-check the
+override value character-by-character against the actual dump/APK analysis output
+before assuming the id itself is wrong. This has already happened once (Flash's
+`opmode_dropdown` override) and cost real debugging time before the typo was spotted
+in the resolve log.
 
-Then verify the fail-safe property on real hardware: navigate the phone **away** from the DS
-app and press `Ctrl+Alt+F1`. **Nothing should happen.** That inversion — nothing, rather than
-something wrong — is the entire justification for this design over the reverted coordinate
-tap, and it is worth confirming with your own eyes on the real app.
+## 8. Full bring-up (confirmed working)
 
-Robot Reset's **Status** screen shows the resolution log (what was clicked, and the reason
-when it was not), which is the no-cable way to inspect all of the above. Over a cable,
-`tools\logcat-robotreset.ps1` shows the same trace plus per-key detail.
+With the trigger chain live (transmitter running `driver_station_flask.py`, Feather M0
+attached to the phone) and the DS app foregrounded and actually connected to a live
+Robot Controller (OpMode selection needs a real pairing — a disconnected DS app shows
+an empty OpMode list and the selector will correctly time out finding nothing, which
+is fail-safe behavior, not a bug):
+
+The dashboard needs **four** buttons for full coverage — the three named commands
+(INIT/START/STOP) plus a dedicated OpMode-select button, since OpMode selection isn't
+one of the three named `UI_COMMAND_KEYS` in `driver_station_flask.py` by default. See
+`ftc-lora:docs/procedures.md` for adding this if it isn't already there.
+
+Confirmed chord table (this team's final configuration):
+
+| Command | Chord | Result |
+| --- | --- | --- |
+| OPMODE (select slot 0) | `Ctrl+Alt+F5` | Opens the OpMode dropdown, finds and clicks the configured slot-0 OpMode name |
+| INIT | `Ctrl+Alt+F1` | Clicks INIT (only enabled once an OpMode is selected) |
+| START | `Ctrl+Alt+F2` | Clicks START |
+| STOP | `Ctrl+Alt+F3` | Clicks STOP |
+
+Order matters for a cold start: OpMode select → INIT → START → STOP, same as
+operating the DS app by hand.
+
+Then verify the fail-safe property on real hardware: navigate the phone **away** from
+the DS app and fire `Ctrl+Alt+F1`. **Nothing should happen.** That inversion —
+nothing, rather than something wrong — is the entire justification for this design
+over the reverted coordinate tap, and it is worth confirming with your own eyes on
+the real app.
+
+Robot Reset's **Status** screen shows the resolution log (what was clicked, and the
+reason when it was not), which is the no-cable way to inspect all of the above. Over
+a cable, `tools\logcat-robotreset.ps1` shows the same trace plus per-key detail — but
+per the networking note above, do not assume the cable/wireless link will be
+available once the phone is on the robot's own Wi-Fi AP; the on-screen Status log is
+the dependable path in that case.
 
 ## 9. Pre-session check, every session afterward
 
-Service enablement is not remotely observable, and nobody is at this phone once the robot is
-out. Before relying on it: open Robot Reset and confirm **"Accessibility service: RUNNING"**.
-The service does survive reboot once enabled, unlike `adb tcpip` or Shizuku — but confirm,
-do not assume.
+Service enablement is not remotely observable, and nobody is at this phone once the
+robot is out. Before relying on it: open Robot Reset and confirm **"Accessibility
+service: RUNNING"**. The service does survive reboot once enabled, unlike `adb tcpip`
+or Shizuku — but confirm, do not assume.
 
-## Still not solved after this session
+## 10. Multi-robot findings: Flash and Sol
 
-The driver gets **no acknowledgement**. Failure is safe rather than dangerous, which is the
-point, but the LoRa link is transmit-only so success cannot be confirmed remotely. The
-existing 5.8 GHz FPV camera path pointed at the phone screen is the practical mitigation.
+Flash (Feather M0, same `fable.ino`-derived firmware/architecture) and Sol (Feather
+32u4, architecturally different USB stack) have both since been through full bring-up
+too. Flash's session did not surface anything Fable's hadn't already covered above.
+Sol's did — several real findings, some general (apply to any robot/DS app build),
+some specific to the 32u4's different USB stack.
 
-The LoRa path itself (`BTN_UI_CMD`, `fable/fable.ino`, `driver_station_flask.py`) is not part
-of this app and is not built. Those files live on the `ftc-lora` / `remote-adb` branches.
+### Gotcha 5: a resolved node can report `clicked=true` and still do nothing
+
+On Sol's phone (Android 8.0/Oreo), clicking a resolved, enabled, clickable node via
+plain `ACTION_CLICK` sometimes returned `true` and even visibly dismissed a dialog,
+while the app's real underlying selection logic never ran — reproducible specifically
+on the OpMode list's `AlertDialog` row. A real touch (and TalkBack) always place
+`ACTION_ACCESSIBILITY_FOCUS` on a node before `ACTION_CLICK`; some widget/list click
+paths are apparently wired to care about focus state on this Android version, not
+purely the `AdapterView` position lookup `ACTION_CLICK` triggers on its own. Fix:
+`AccessibilityNodeRefImpl.click()` now always performs `ACTION_ACCESSIBILITY_FOCUS`
+immediately before `ACTION_CLICK`. This is unconditional for every click in the app
+now (not Sol-specific) — it is a no-op on devices that don't need it, and it is what
+actually fixed Sol's OpMode selection.
+
+### Gotcha 6: DS app resource-ids can drift across an in-session app update, silently
+
+Mid-session, Sol's Driver Station app was updated (it had been showing an "obsolete
+app" warning). After the update, INIT/START/STOP's `VIEW_ID` overrides — which had
+been copied from Fable's Section 6 findings and worked fine before the update — all
+started resolving as `not found`, indefinitely, regardless of how long you wait after
+OpMode selection. The new DS app build had simply renamed/removed those specific
+view-ids. Diagnosis path that actually worked: confirm the target **is** genuinely
+present and functional by testing a real manual tap first (see Gotcha 2's original
+form of this same idea) — if manual tap works but automated resolution reports
+`not found` no matter the timing, suspect a stale id/text override before suspecting a
+timing or resolver bug. Fix was a config change (switch INIT/START to plain
+`TEXT("INIT")`/`TEXT("START")` overrides), not a rebuild — exactly what Section 7's
+override system exists for. **Re-run Section 6/7 after any DS app update**, not just
+once at initial setup.
+
+### New capability: `TargetSpec.Kind.TEXT_SIBLING`, for overlapping decorative controls
+
+Sol's DS app skin ("NEXT-A-DS") renders its combined INIT/START/STOP control as a
+single circular touch target that relabels itself per state — but once running, the
+STOP state is a bare icon with **no** text, content-description, or view-id at all.
+Worse: static analysis of the live tree found **two different clickable `ImageButton`s
+at the exact same screen bounds** — one carries `content-desc="StartButton"` (a
+static label that does not change with the button's state, present at INIT/START/STOP
+alike), the other has no accessible label whatsoever. Clicking the labeled one
+reported `clicked=true` but had no real effect; clicking the *other* one (found only
+by testing empirically, via a temporary debug hook that clicks the Nth clickable node
+in the tree) actually worked.
+
+The reason: Android hit-tests overlapping siblings in reverse child order — the
+later-drawn (topmost) one receives real touches first. The labeled node here is a
+decorative/accessibility-only layer; the real one, layered on top, has no label at
+all.
+
+`TargetSpec.Kind.TEXT_SIBLING` encodes this pattern generally: it resolves by text or
+content-description exactly like `TEXT`, but then looks among the resolved node's
+*siblings* (same parent) for another clickable, enabled node at the exact same bounds,
+and clicks the **last** one found in child order instead — falling back to the
+originally-matched node if no such sibling exists. It's a genuine `Resolver`
+capability now (`ResolverImpl.preferTopmostSiblingAtSameBounds`), not a one-off hack,
+but it is opt-in only: an ordinary `TEXT`/`VIEW_ID` target never triggers it, so it
+cannot change behavior anywhere it isn't explicitly configured. Set it the same way as
+any other override, just choosing `TEXT_SIBLING` for the kind (not yet exposed in
+`ConfigActivity`'s radio group as of this writing — set it via the debug-build
+`SET_OVERRIDE` broadcast in the meantime: `adb shell am broadcast -a
+com.next2026.robotreset.DEBUG_COMMAND -p com.next2026.robotreset --es cmd SET_OVERRIDE
+--es key stop --es kind TEXT_SIBLING --es value StartButton`).
+
+If a target reports `clicked=true` with a real, present, enabled node and still has no
+effect, and a manual tap on the same visual control *does* work, suspect this exact
+overlapping-sibling pattern next — dump the live tree's clickable nodes (see the
+debug-build `DUMP_TREE` broadcast, same mechanism) and look for more than one
+clickable node at identical bounds.
+
+### Sol-specific: Feather 32u4's USB stack can block `loop()` for up to ~500ms
+
+Fable/Flash (Feather M0, TinyUSB) send gamepad and keyboard reports over two fully
+independent USB interfaces/endpoints, and gate every send on `usb_hid.ready()` — a
+non-blocking check, so a slow/unresponsive host just means that cycle's report is
+silently skipped. Sol (Feather 32u4, AVR `HID.h`) has neither: gamepad and keyboard
+share one physical endpoint (the only option this stack has), and `HID_::SendReport()`
+is a **blocking** call — verified directly in the installed Arduino AVR core
+(`USBCore.cpp`): `USB_Send()` retries for up to 250ms per phase (~500ms for a full
+report: ID byte + payload) if the endpoint isn't draining, and AVR's `HID.h` exposes no
+non-blocking readiness check at the sketch level at all. If the host is briefly slow to
+drain HID (plausible around the DS app's own crash/relaunch — see below), Sol's whole
+`loop()` can stall for up to ~500ms per blocked send, starving LoRa reception and the
+chord-release timer in a way that's architecturally impossible on the M0 boards.
+
+Mitigation applied in `sol.ino` (see `ftc-lora:sol/sol.ino`, no vendored core files
+touched): skip the routine 20ms gamepad send while a chord press is outstanding
+(nothing is lost — controls are already forced neutral during a chord), and log when a
+chord press's `sendReport()` actually fails, so a future silent drop is visible in
+Serial instead of untraceable.
+
+### The Driver Station app has its own pre-existing crash bug, unrelated to this app
+
+`FATAL EXCEPTION` / `IllegalArgumentException: Receiver not registered:
+...DriverStationAccessPointAssistant$1`, during `handleRelaunchActivity` → `onDestroy`
+→ `shutdown`. Confirmed to be a genuine bug in Qualcomm's own app, not this app or the
+firmware: it recurred on a freshly force-stopped-and-relaunched process (a brand new
+PID, no accumulated state from any earlier crash), triggered by USB controller
+connect/disconnect churn as well as by rapid successive chord firing. The app usually
+self-recovers via its own relaunch. Practical mitigations:
+
+- After plugging in the trigger hardware, **wait for the DS app to visibly settle**
+  (confirm it's on a normal, stable screen) before firing any chord — firing
+  immediately after connect risks catching the app mid-relaunch, when a target
+  element genuinely isn't in the tree (not a resolver bug).
+- Don't fire chords in rapid succession (e.g. OPMODE→INIT→START→STOP within a few
+  seconds) — this alone was observed to trigger the crash.
+- If the app is behaving strangely and simply waiting doesn't help, **force-stop it
+  fully** (`adb shell am force-stop com.qualcomm.ftcdriverstation`) rather than
+  relying on its own relaunch — an in-process Activity relaunch does not clear
+  whatever leaked receiver state contributed to the crash in the first place, so
+  repeated relaunches within the same process can compound. Reopen it from the home
+  screen afterward (its main activity isn't exported, so `adb shell am start` cannot
+  relaunch it).
+- Unplugging the trigger Feather from the phone can itself cause the DS app to reset
+  to "Select OpMode" (losing INIT/START progress) — this was observed to happen
+  inconsistently (sometimes yes, sometimes no) across otherwise-identical swaps. Budget
+  for re-running OpMode select after any Feather unplug/replug cycle during a bench
+  session; this is a DS-app/USB-churn behavior, not something this app's resolution
+  logic can detect or avoid.
+
+### Sol: confirmed chord table, full bring-up
+
+| Command | Chord | Result |
+| --- | --- | --- |
+| OPMODE (select slot 0) | `Ctrl+Alt+F5` | Opens the TeleOp dropdown, clicks the configured slot-0 OpMode name |
+| INIT | `Ctrl+Alt+F1` | `TEXT("INIT")` |
+| START | `Ctrl+Alt+F2` | `TEXT("START")` |
+| STOP | `Ctrl+Alt+F3` | `TEXT_SIBLING("StartButton")` — see above |
+
+All four confirmed working end-to-end against a live Robot Controller connection, real
+Feather 32u4 hardware, real LoRa link.
+
+## Still not solved
+
+The driver gets **no acknowledgement** that a chord's click actually landed (only
+that the chord was *sent* — the dashboard has no read path back from the phone). The
+existing 5.8 GHz FPV camera path pointed at the phone screen is the practical
+mitigation; the Status screen's resolution log is the fallback when the FPV feed
+isn't available or convenient to check.

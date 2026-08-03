@@ -134,7 +134,15 @@ public final class TargetConfig {
             // always succeed.
             return defaultSpec;
         }
-        return kind == TargetSpec.Kind.VIEW_ID ? TargetSpec.viewId(value) : TargetSpec.text(value);
+        switch (kind) {
+            case VIEW_ID:
+                return TargetSpec.viewId(value);
+            case TEXT_SIBLING:
+                return TargetSpec.textSibling(value);
+            case TEXT:
+            default:
+                return TargetSpec.text(value);
+        }
     }
 
     static String resolveSlotText(SharedPreferences prefs, int slotIndex) {

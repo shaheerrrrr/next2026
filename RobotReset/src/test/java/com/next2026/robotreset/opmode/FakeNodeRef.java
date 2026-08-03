@@ -63,6 +63,11 @@ final class FakeNodeRef implements NodeRef {
     }
 
     @Override
+    public int[] getBoundsInScreen() {
+        return null;
+    }
+
+    @Override
     public int getChildCount() {
         return children.size();
     }

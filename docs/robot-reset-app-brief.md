@@ -1,5 +1,11 @@
 # Build Brief: `robot-reset-app` — Android AccessibilityService for FTC Driver Station Control
 
+> **Status: built and verified on real hardware.** This brief is kept as-written for
+> historical/design context — it was the planning document, not a description of
+> current state. For what's actually implemented, what's been confirmed working on
+> real hardware, and how to set this up yourself, read `docs/bring-up.md` instead.
+> `docs/design-accessibility-tap.md` has the design rationale, still accurate.
+
 You are building a small Android app on branch `robot-reset-app` in the repo
 `C:\Users\khans\OneDrive\Documents\GitHub\next2026` (Windows, PowerShell primary,
 Bash also available). The branch is created off `master`.

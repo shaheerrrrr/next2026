@@ -72,6 +72,52 @@ public final class DebugCommandReceiver extends BroadcastReceiver {
             return;
         }
 
+        // Not a ChordDecoder.Command: a separate diagnostic path (see
+        // RobotResetService.dispatchDebugDumpTree()'s doc comment) that logs
+        // the current window's clickable nodes instead of driving a chord.
+        if ("DUMP_TREE".equals(cmd)) {
+            RobotResetService.dispatchDebugDumpTree();
+            return;
+        }
+
+        // Diagnostic-only: click the Nth clickable node (see
+        // RobotResetService.dispatchDebugClickIndex()'s doc comment).
+        if ("CLICK_INDEX".equals(cmd)) {
+            int index = intent.getIntExtra(EXTRA_SLOT, -1);
+            if (index < 0) {
+                Log.w(TAG, "CLICK_INDEX requires a non-negative --ei slot <index>");
+                return;
+            }
+            RobotResetService.dispatchDebugClickIndex(index);
+            return;
+        }
+
+        // Debug-only convenience: set a TargetConfig override without going
+        // through ConfigActivity's UI (which only has VIEW_ID/TEXT radio
+        // buttons -- this is how TEXT_SIBLING overrides get set today).
+        // Goes through the exact same TargetConfig.setOverride() a real
+        // ConfigActivity save would call, so the persisted state is
+        // identical either way.
+        if ("SET_OVERRIDE".equals(cmd)) {
+            String key = intent.getStringExtra("key");
+            String kindStr = intent.getStringExtra("kind");
+            String value = intent.getStringExtra("value");
+            if (key == null || kindStr == null || value == null) {
+                Log.w(TAG, "SET_OVERRIDE requires --es key <key> --es kind <kind> --es value <value>");
+                return;
+            }
+            com.next2026.robotreset.resolve.TargetSpec.Kind kind;
+            try {
+                kind = com.next2026.robotreset.resolve.TargetSpec.Kind.valueOf(kindStr);
+            } catch (IllegalArgumentException e) {
+                Log.w(TAG, "SET_OVERRIDE unknown kind='" + kindStr + "'");
+                return;
+            }
+            com.next2026.robotreset.config.TargetConfig.setOverride(context, key, kind, value);
+            Log.i(TAG, "SET_OVERRIDE key=" + key + " kind=" + kind + " value=" + value);
+            return;
+        }
+
         ChordDecoder.Command command;
         try {
             command = ChordDecoder.Command.valueOf(cmd);

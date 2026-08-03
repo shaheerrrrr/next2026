@@ -90,6 +90,9 @@ public final class ResolverImpl implements Resolver {
                         // for this candidate, already recycled internally.
                         continue;
                     }
+                    if (current.kind == TargetSpec.Kind.TEXT_SIBLING) {
+                        ancestor = preferTopmostSiblingAtSameBounds(ancestor);
+                    }
                     if (!ancestor.isEnabled()) {
                         sawDisabled = true;
                         ancestor.recycle();
@@ -157,6 +160,67 @@ public final class ResolverImpl implements Resolver {
             hops++;
         }
         return null;
+    }
+
+    /**
+     * See {@link TargetSpec.Kind#TEXT_SIBLING}'s doc comment for why this
+     * exists. Looks at {@code node}'s parent's children (not {@code node}
+     * itself) for another clickable, enabled node whose bounds exactly match
+     * {@code node}'s, and returns the LAST one found in child order (Android
+     * hit-tests later-drawn/topmost siblings first, so this is the one a
+     * real touch actually reaches). Returns {@code node} unchanged if bounds
+     * are unavailable, there's no parent, or no such sibling exists -- this
+     * is a preference, not a requirement, so it degrades to ordinary
+     * behavior rather than failing resolution outright.
+     */
+    private NodeRef preferTopmostSiblingAtSameBounds(NodeRef node) {
+        int[] targetBounds = node.getBoundsInScreen();
+        if (targetBounds == null) {
+            return node;
+        }
+        NodeRef parent = node.getParent();
+        if (parent == null) {
+            return node;
+        }
+        // node is not recycled here yet: it stays a live candidate for best
+        // until something replaces it below (it is always its own bounds
+        // match), and the eventual winner is left un-recycled for the
+        // caller, exactly like findClickableAncestor's contract.
+        NodeRef best = node;
+        int count = parent.getChildCount();
+        for (int i = 0; i < count; i++) {
+            NodeRef sibling = parent.getChild(i);
+            if (sibling == null) {
+                continue;
+            }
+            if (sibling == best) {
+                // Same underlying node as the current best (e.g. node's own
+                // slot in its parent's children): nothing to compare or
+                // recycle, just move on.
+                continue;
+            }
+            if (sibling.isClickable() && sibling.isEnabled()
+                    && sameBounds(targetBounds, sibling.getBoundsInScreen())) {
+                if (best != node) {
+                    best.recycle();
+                }
+                best = sibling;
+            } else {
+                sibling.recycle();
+            }
+        }
+        parent.recycle();
+        if (best != node) {
+            node.recycle();
+        }
+        return best;
+    }
+
+    private boolean sameBounds(int[] a, int[] b) {
+        if (a == null || b == null || a.length != 4 || b.length != 4) {
+            return false;
+        }
+        return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
     }
 
     private void recycleRemaining(List<NodeRef> matches, int fromIndexInclusive) {

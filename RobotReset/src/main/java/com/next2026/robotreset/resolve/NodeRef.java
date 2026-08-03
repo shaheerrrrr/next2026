@@ -19,6 +19,14 @@ public interface NodeRef {
     /** Resource-id string form, e.g. "com.qualcomm.ftcdriverstation:id/init". May return null. */
     String getViewId();
 
+    /**
+     * Screen bounds as {@code {left, top, right, bottom}}, or {@code null} if
+     * unknown. Used only by {@link Resolver}'s same-bounds-sibling
+     * preference (see {@link TargetSpec.Kind#TEXT_SIBLING}) -- not part of
+     * ordinary VIEW_ID/TEXT matching.
+     */
+    int[] getBoundsInScreen();
+
     int getChildCount();
 
     NodeRef getChild(int index);
