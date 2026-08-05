@@ -129,6 +129,11 @@ The first controller behaves as follows:
 
 All speed and steering values are centralized in `PointToPointController` for field tuning.
 
+`Drivetrain` applies the same time-based soft acceleration interface used by Flash. Tune
+`MAX_DRIVE_ACCEL` for translation response and `MAX_TURN_ACCEL` for steering response; both
+values are motor-power units per second. `MAX_SLEW_TIMESTEP_SECONDS` caps the time credited to
+one delayed control-loop update and normally should not require tuning.
+
 ## Telemetry
 
 The live Driver Station display includes:
