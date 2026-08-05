@@ -5,7 +5,7 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import org.firstinspires.ftc.teamcode.subsystems.CandyCane;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
-import org.firstinspires.ftc.teamcode.subsystems.Intake;
+import org.firstinspires.ftc.teamcode.subsystems.ChudIntake;
 
 @TeleOp(name = "Flash", group = "TeleOp")
 public class FlashTeleOp extends LinearOpMode {
@@ -24,7 +24,7 @@ public class FlashTeleOp extends LinearOpMode {
     public void runOpMode() {
         Drivetrain drivetrain = new Drivetrain(hardwareMap);
         CandyCane candyCane = new CandyCane(hardwareMap);
-        Intake intake = new Intake(hardwareMap);
+        ChudIntake intake = new Intake(hardwareMap);
 
         waitForStart();
 
