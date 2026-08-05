@@ -1204,7 +1204,8 @@ INDEX_HTML = r"""<!doctype html>
 
           <div id="solControls" class="hidden">
             <div class="button-grid">
-              <div class="btn-state" id="solX">X</div>
+              <div class="btn-state" id="solB">Circle / B</div>
+              <div class="btn-state" id="solX">Square / X</div>
               <div class="btn-state" id="solRt">Right Trigger</div>
             </div>
             <div class="control-block" style="margin-top: 16px;">
@@ -2158,6 +2159,7 @@ INDEX_HTML = r"""<!doctype html>
       setButton('triangle', frame.triangle);
       setButton('leftBumper', frame.left_bumper);
       setButton('rightBumper', frame.right_bumper);
+      setButton('solB', frame.circle);
       setButton('solX', frame.square);
       setButton('solRt', frame.rt > 20);
       setButton('dpadUp', frame.dpad_up);

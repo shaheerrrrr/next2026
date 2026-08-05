@@ -16,6 +16,7 @@
 #define LED 13
 
 #define BTN_CROSS      0x0001
+#define BTN_CIRCLE     0x0002
 #define BTN_SQUARE     0x0004
 #define BTN_OPTIONS    0x0010
 #define BTN_DPAD_UP    0x0080
@@ -357,6 +358,9 @@ void updateGamepadReport() {
 
   if (latestButtons & BTN_CROSS) {
     gp.buttons |= (1UL << 0);
+  }
+  if (latestButtons & BTN_CIRCLE) {
+    gp.buttons |= (1UL << 1);
   }
   if (latestButtons & BTN_SQUARE) {
     gp.buttons |= (1UL << 3);

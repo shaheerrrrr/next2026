@@ -11,7 +11,7 @@ matching Feather turns it into USB HID gamepad state.
 | --- | --- | --- | --- |
 | Flash | `1` | Standard sticks, triggers, face buttons, and bumpers | None in this control system |
 | Fable | `2` | Same standard HID profile as Flash | GPS point-to-point navigation on its Control Hub |
-| Sol | `3` | Sticks, D-pad, right trigger, Cross, Square, and Options | None in this control system |
+| Sol | `3` | Sticks, D-pad, right trigger, Cross, Circle, Square, and Options | None in this control system |
 
 The reserved address `255` means all robots. Normal dashboard operation uses an
 individual ID.
@@ -134,6 +134,7 @@ controls required by Sol:
 - Four D-pad directions, including diagonals as a HID hat
 - Right analog trigger
 - Cross
+- Circle
 - Square
 - Options for registration
 

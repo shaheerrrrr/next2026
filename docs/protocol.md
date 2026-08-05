@@ -328,6 +328,7 @@ the right trigger to `accelerator`.
 | Protocol input | Sol HID output |
 | --- | --- |
 | Cross | HID button bit `0` |
+| Circle | HID button bit `1` |
 | Square | HID button bit `3` |
 | Options | HID button bit `11` |
 | Right trigger | Accelerator `0..255` |
