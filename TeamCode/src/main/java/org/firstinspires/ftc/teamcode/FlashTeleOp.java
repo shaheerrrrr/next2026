@@ -24,7 +24,7 @@ public class FlashTeleOp extends LinearOpMode {
     public void runOpMode() {
         Drivetrain drivetrain = new Drivetrain(hardwareMap);
         CandyCane candyCane = new CandyCane(hardwareMap);
-        ChudIntake intake = new Intake(hardwareMap);
+        ChudIntake intake = new ChudIntake(hardwareMap);
 
         waitForStart();
 
