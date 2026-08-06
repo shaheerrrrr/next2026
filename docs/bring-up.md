@@ -63,7 +63,7 @@ If you are setting this up from scratch, get both sides going in this order:
 
 | Claim | Status |
 | --- | --- |
-| Element resolution, clickable-ancestor walk, disabled-node no-op | Verified on emulator (7/7 E2E) + JVM unit tests |
+| Element resolution, clickable-ancestor walk, disabled-node no-op | Verified on emulator (8/8 E2E) + JVM unit tests |
 | OpMode dropdown open / wait / scroll / match, from a cold dropdown | Verified on emulator |
 | Fail-safe: absent or disabled target produces no click | Verified on emulator, both negative controls |
 | `FLAG_REQUEST_FILTER_KEY_EVENTS` took effect | Verified — `dumpsys accessibility` reports `KeyboardInterceptor` active |
@@ -71,6 +71,8 @@ If you are setting this up from scratch, get both sides going in this order:
 | Consuming the chord vs. pass-through toggle | Verified — `consumed=true`/`false` behaves correctly per chord match |
 | Real DS app resource-ids (this team's build) | **Verified** — see Section 7 for the discovered ids and how to redo this for a different DS app build |
 | Full chord → real click on the real Driver Station app, with a live Robot Controller connection | **Verified** — OpMode select, INIT, START, STOP all confirmed working end-to-end |
+| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware** (Fable) — see "Opening the DS app itself" below |
+| `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware** (Fable, 4/4) — **requires Samsung's "Unrestricted" battery access to be granted first**, see "Opening the DS app itself" below |
 
 `adb shell input keyevent` (or `keycombination`) cannot substitute for a real keyboard
 here: it injects via `InputManager`, which never reaches the accessibility
@@ -205,6 +207,17 @@ fire and Step 0 fails for a reason unrelated to the design.
 If you enable it through Settings → Accessibility instead and Android blocks it, clear
 the restriction via Settings → Apps → Robot Reset → ⋮ → **Allow restricted settings**,
 then retry the toggle.
+
+### On Samsung phones: also grant "Unrestricted" battery access
+
+Settings → Apps → Robot Reset → Battery → **Unrestricted**. This is required for
+`LAUNCH_DS` (`Ctrl+Alt+F4`) to reliably wake the screen and dismiss the keyguard when
+the phone is genuinely asleep/locked — without it, that specific case silently fails
+even though everything else in this app (including `LAUNCH_DS` itself when the phone
+is already awake) works fine. It is a one-time manual step, cannot be granted by the
+app itself, and is separate from the stock Android Doze allowlist. See "Opening the DS
+app itself" below for the full finding. Confirm this on every Samsung phone in the
+fleet (Fable, Flash); Sol has no OneUI and this step may not apply to it at all.
 
 ## 4. STEP 0 — the hard gate (confirmed passing)
 
@@ -417,7 +430,12 @@ Confirmed chord table (this team's final configuration):
 | STOP | `Ctrl+Alt+F3` | Clicks STOP |
 
 Order matters for a cold start: OpMode select → INIT → START → STOP, same as
-operating the DS app by hand.
+operating the DS app by hand. A fifth command, `LAUNCH_DS` (`Ctrl+Alt+F4`), opens the
+DS app itself rather than clicking inside it, including from a fully asleep/locked
+phone — see the dedicated subsection below, which also covers the one-time device
+setting it needs on Samsung hardware. It is not part of this table because it is not
+element-resolution and needs that separate setup step, not because it is less
+verified.
 
 Then verify the fail-safe property on real hardware: navigate the phone **away** from
 the DS app and fire `Ctrl+Alt+F1`. **Nothing should happen.** That inversion —
@@ -431,6 +449,80 @@ a cable, `tools\logcat-robotreset.ps1` shows the same trace plus per-key detail 
 per the networking note above, do not assume the cable/wireless link will be
 available once the phone is on the robot's own Wi-Fi AP; the on-screen Status log is
 the dependable path in that case.
+
+### Opening the DS app itself: LAUNCH_DS (`Ctrl+Alt+F4`)
+
+Every command above assumes the DS app is already the foreground app and clicks an
+element inside it — by design, they fail safe (do nothing) otherwise. `LAUNCH_DS`
+(`ChordDecoder.Command.LAUNCH_DS`, chord `Ctrl+Alt+F4`) is different in kind: it
+brings the DS app itself onto the screen from any state — home screen, a different
+app, or a DS sub-screen — via `DriverStationLauncher`
+(`com.next2026.robotreset.launch`), which resolves and starts the DS app's launcher
+activity with `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK` (a **force-relaunch**:
+discards the DS app's existing task back stack, equivalent to swiping it from Recents
+and re-tapping its icon — this is *not* `adb shell am force-stop`, which kills a
+process outright; no public Android API lets one app do that to another, so a
+genuinely wedged DS app process, see the crash-bug notes below, is not cured by this).
+The launch always routes through `DsLaunchActivity`, a transient translucent relay
+activity, because only an Activity's own window (not a Service) can affect keyguard/
+screen-wake state.
+
+**Real-hardware finding — package visibility (Android 11+ / API 30+):** an app
+targeting API 30+ cannot see another app via `PackageManager` at all, including
+`getLaunchIntentForPackage()`, unless the target package is declared in a `<queries>`
+manifest element. This bit on the very first real-device test: `LAUNCH_DS` reported
+`package not found` even though `com.qualcomm.ftcdriverstation` was genuinely
+installed, because `adb shell monkey`/`pm` (used for an earlier feasibility check)
+run as the `shell` UID, which is exempt from this filtering — an ordinary installed
+app is not. Fixed by adding
+`<queries><package android:name="com.qualcomm.ftcdriverstation" /></queries>` to
+`RobotReset/src/main/AndroidManifest.xml`. If `LAUNCH_DS` ever regresses to
+`package not found` again with the DS app genuinely present, check this element
+before suspecting anything else.
+
+**Confirmed on real hardware (Fable, Samsung Galaxy S20 FE, Android 13/API 33):**
+with the DS app backgrounded, on a different app, or on a DS sub-screen, and the
+phone already awake and unlocked, firing `LAUNCH_DS` (via the debug broadcast, real
+chord not yet bench-tested) reliably brings `FtcDriverStationActivity` to the
+foreground every time.
+
+**Screen wake from a genuinely asleep/locked phone — confirmed working, but needs a
+one-time manual device setting.** With the screen off and the keyguard showing,
+`LAUNCH_DS` reliably wakes the screen, dismisses the keyguard, and brings the DS app
+to the foreground (4/4 across two separate sessions, with adequate settle time
+between test cycles — see below) **once RobotReset is granted Samsung's
+"Unrestricted" battery access**: Settings → Apps → Robot Reset → Battery →
+**Unrestricted**. This is **not** the same as Samsung's usual "sleeping apps" list
+(which didn't exist as an option on this phone) or the stock Android Doze allowlist
+(`dumpsys deviceidle whitelist`) — that stock allowlist was tried first and made no
+difference at all, which is the key finding here: **Samsung's OneUI battery
+management is a separate, stricter layer on top of stock Android Doze.** Exempting an
+app from AOSP's doze restrictions does not exempt it from Samsung's own restrictions;
+only the Samsung-specific "Unrestricted" setting does. Every other approach tried
+before finding this — the code exactly as shipped, the same work in `onCreate()`
+instead of deferred to `onResume()`, and an explicit `PowerManager.FULL_WAKE_LOCK`
+with `ACQUIRE_CAUSES_WAKEUP` — reproducibly failed without this setting (screen stayed
+off, keyguard stayed up, even though the DS app's activity became the
+`ActivityManager`'s `ResumedActivity` internally the whole time). None of that other
+code was kept beyond the `onResume()` deferral, which does no harm either way.
+
+**Practical consequence: add "grant Robot Reset Unrestricted battery access" to the
+one-time per-phone setup checklist**, alongside enabling the accessibility service
+(Section 3). This app cannot grant this to itself — there is no public API for it,
+Samsung or otherwise — so it must be set by hand once per phone, the same way the
+accessibility service itself must be enabled once per phone. **A short settle time
+between the phone going to sleep and firing the chord matters**: an initial rapid-fire
+test loop (force-stop DS app → sleep → fire chord within ~1 second) produced 1
+success and 2 failures out of 3, but the *identical* sequence with a few extra
+seconds of settle time after each transition produced 4/4 successes across two
+sessions — treat a failure under rapid/back-to-back testing as inconclusive, not as
+evidence the fix doesn't work, and prefer a few seconds of slack in the field too.
+Flash (same hardware/OS as Fable, same OneUI) is expected to need the identical
+setting; Sol (different OEM, Android 8.0/API 26, no OneUI, and exercises the
+deprecated pre-27 window-flag branch instead of `setShowWhenLocked`/`setTurnScreenOn`)
+is untested and may need an OEM-equivalent setting, a different fix entirely, or
+nothing at all — don't assume either way until it's actually been through this same
+bench check.
 
 ## 9. Pre-session check, every session afterward
 

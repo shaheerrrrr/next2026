@@ -2,6 +2,7 @@ package com.next2026.robotreset;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.Intent;
 import android.graphics.Rect;
 import android.util.Log;
 import android.view.KeyEvent;
@@ -9,6 +10,7 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import com.next2026.robotreset.config.TargetConfig;
+import com.next2026.robotreset.launch.DsLaunchActivity;
 import com.next2026.robotreset.opmode.OpModeSelector;
 import com.next2026.robotreset.resolve.AccessibilityUiTree;
 import com.next2026.robotreset.resolve.Resolver;
@@ -285,10 +287,33 @@ public final class RobotResetService extends AccessibilityService {
             case OPMODE_SLOT:
                 startOpModeSelection(decoded.slotIndex);
                 break;
+            case LAUNCH_DS:
+                launchDriverStationApp();
+                break;
             case NONE:
             default:
                 break;
         }
+    }
+
+    /**
+     * Unlike every other command above, this isn't element resolution -- it
+     * brings the DS app onto the screen from home screen, a different app,
+     * a DS sub-screen, or a genuinely sleeping/locked phone, which requires
+     * an Activity's window (for the wake/keyguard-dismiss attempt), not
+     * anything a Service can do directly. Confirmed reliable on real
+     * hardware for all of those, including asleep/locked -- but the last
+     * case needed a one-time manual device setting (Samsung's
+     * "Unrestricted" battery access) that isn't set by default and can't be
+     * granted by this app itself; see the "Confirmed on real hardware"
+     * section of {@link DsLaunchActivity}'s doc comment for what that
+     * requires and why. See also
+     * {@link com.next2026.robotreset.launch.DriverStationLauncher}.
+     */
+    private void launchDriverStationApp() {
+        Intent intent = new Intent(this, DsLaunchActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
     }
 
     private void startOpModeSelection(int slotIndex) {

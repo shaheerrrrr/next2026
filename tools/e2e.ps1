@@ -172,7 +172,7 @@ function Send-Chord {
     # it's not expected to matter since the accessibility service keeps the
     # process alive, but costs nothing to include.
     param(
-        [string]$Command,        # ChordDecoder.Command name: INIT, START, STOP, OPMODE_SLOT
+        [string]$Command,        # ChordDecoder.Command name: INIT, START, STOP, OPMODE_SLOT, LAUNCH_DS
         [int]$Slot = -1           # only meaningful when $Command -eq "OPMODE_SLOT"
     )
     $args = @(
@@ -191,6 +191,17 @@ function Send-Chord {
 function Get-FdsLogcat {
     # -d dumps and exits (does not block); -s filters by tag.
     $lines = & $adb logcat -d -s "$FdsLogTag`:I"
+    return ($lines -join "`n")
+}
+
+function Get-RobotResetLogcat {
+    # Separate from Get-FdsLogcat: ResolutionLog
+    # (RobotReset/src/main/.../ui/ResolutionLog.java) logs under tag
+    # "RobotReset", not "FakeDriverStation". Needed for the LAUNCH_DS case,
+    # which never touches FakeDriverStation at all -- its outcome (attempted
+    # and failed safe, because the real DS app isn't installed on this
+    # emulator) only shows up in RobotReset's own trace.
+    $lines = & $adb logcat -d -s "RobotReset`:D"
     return ($lines -join "`n")
 }
 
@@ -510,6 +521,28 @@ Invoke-TestCase -Name "Trigger while FakeDriverStation not foregrounded -> nothi
     -Setup { & $adb shell input keyevent $KC_HOME | Out-Null; Start-Sleep -Seconds 1 } `
     -Command "START" -WaitSeconds 2 `
     -ExpectAbsent @("INIT_CLICKED", "START_CLICKED", "STOP_CLICKED", "OPMODE_SELECTED")
+
+# Test 8: LAUNCH_DS. Unlike every other case, this command has nothing to do
+# with FakeDriverStation at all -- it launches com.qualcomm.ftcdriverstation
+# (the real FTC Driver Station app), which is not and cannot be installed on
+# this emulator. That makes this a fail-safe negative control of a different
+# kind than test 1/7: it proves DsLaunchActivity + DriverStationLauncher
+# handle a missing target package the same way the Resolver handles a missing
+# UI element -- report it via ResolutionLog and do nothing else, never crash
+# -- rather than proving a real launch succeeds (that requires the real DS
+# app and is a real-hardware-only check, same caveat as every chord in this
+# harness; see the top-of-file comment block). ResolutionLog logs under tag
+# "RobotReset", not "FakeDriverStation", hence Get-RobotResetLogcat.
+Invoke-TestCase -Name "LAUNCH_DS with DS app absent -> fails safe, no crash" `
+    -Command "LAUNCH_DS" -WaitSeconds 2 `
+    -ExpectAbsent @("INIT_CLICKED", "START_CLICKED", "STOP_CLICKED", "OPMODE_SELECTED") `
+    -ExtraCheck {
+        $rrLog = Get-RobotResetLogcat
+        $reportedAttempt = $rrLog -match [regex]::Escape("LAUNCH_DS:com.qualcomm.ftcdriverstation")
+        $reportedFailure = $rrLog -match [regex]::Escape("clicked=false")
+        $noCrash = -not ($rrLog -match "FATAL EXCEPTION")
+        return ($reportedAttempt -and $reportedFailure -and $noCrash)
+    }
 
 # Re-foreground FakeDriverStation so the device is left in a sane state for
 # manual follow-up inspection.

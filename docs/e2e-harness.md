@@ -135,9 +135,10 @@ method a real `Ctrl+Alt+Fn` chord's `onKeyEvent` calls. The chord decoding
 and key-consumption step upstream of `handleCommand` (`ChordDecoder`'s
 exact-modifier matching, the down/up/repeat filtering in `onKeyEvent`) is
 exercised manually via `KeyMonitorActivity`/`ConsumeToggle`, not by this
-harness — see "What this harness does NOT prove" below. (`ChordDecoder` has
-no dedicated JVM unit test yet; it's a plain, dependency-free class and
-would be a good candidate for one, but that's outside this lane's scope.)
+harness — see "What this harness does NOT prove" below. `ChordDecoder` itself
+does have a dedicated JVM unit test (`ChordDecoderTest`), covering the full
+decode table plus the exact-modifier-match guarantee; that's a separate,
+faster-running check than this emulator harness, not a substitute for it.
 
 | # | Case | Trigger | Proves |
 | - | ---- | ------- | ------ |
@@ -148,6 +149,7 @@ would be a good candidate for one, but that's outside this lane's scope.)
 | 5 | START | `cmd=START` | START resolves and clicks. Asserts `START_CLICKED`. |
 | 6 | STOP | `cmd=STOP` | STOP resolves and clicks. Asserts `STOP_CLICKED`. |
 | 7 | Any trigger while FakeDriverStation is not foregrounded (Home pressed first) | `cmd=START` | The purest form of the fail-safe property: absent target, nothing happens — no click markers appear at all. This is the harness's most valuable case together with #1: both are negative controls proving nothing happens when the target is absent or disabled, which is the entire justification for element-resolution over the reverted coordinate-tap approach (`docs/design-accessibility-tap.md`). |
+| 8 | `LAUNCH_DS` with the real DS app absent | `cmd=LAUNCH_DS` | A different kind of negative control: unlike cases 1 and 7 (a missing/disabled *element* inside FakeDriverStation), this command targets a different *package* (`com.qualcomm.ftcdriverstation`) that cannot be installed on this emulator at all. Proves `DsLaunchActivity`/`DriverStationLauncher` handle a missing target package the same way the `Resolver` handles a missing element — report via `ResolutionLog` and do nothing else, never crash — rather than proving a real launch succeeds (real-hardware-only; see `docs/bring-up.md`'s "Opening the DS app itself" section for that). Asserts no FakeDriverStation click markers appear, plus (via `Get-RobotResetLogcat`, filtered on tag `RobotReset` rather than `FakeDriverStation` since this command never touches FakeDriverStation) that the attempt was logged with `clicked=false` and no `FATAL EXCEPTION`. |
 
 Test 2 and test 3 deliberately select different slots (0 vs 3) that differ in
 whether they're on-screen, so together they cover both the "found
@@ -171,9 +173,19 @@ OpMode selection sequence described in `docs/design-accessibility-tap.md`.
 - Everything else in the chord's life cycle *before* `handleCommand` —
   `ChordDecoder`'s exact-modifier-match logic and the down/up/repeat
   filtering in `onKeyEvent` — lives entirely upstream of the seam this
-  harness drives, so it isn't exercised here either. It's currently checked
-  only by manual `KeyMonitorActivity`/`ConsumeToggle` inspection at the
-  bench, not by an automated test of any kind.
+  harness drives, so it isn't exercised here either. `ChordDecoder`'s own
+  decode logic is covered by `ChordDecoderTest` (a plain JVM unit test, not
+  this harness); the down/up/repeat filtering in `onKeyEvent` is still
+  checked only by manual `KeyMonitorActivity`/`ConsumeToggle` inspection at
+  the bench.
+- **That `LAUNCH_DS` actually launches the real Driver Station app.** The
+  real app cannot be installed on this emulator (see test case 8), so this
+  harness only proves the fail-safe branch (missing package handled cleanly).
+  A real launch, and in particular whether it can wake a genuinely
+  sleeping/locked phone, is real-hardware-only — see `docs/bring-up.md`'s
+  "Opening the DS app itself" section, which documents this as confirmed
+  for an awake/backgrounded phone and reproducibly **not** working yet for a
+  sleeping/locked one on real hardware.
 
 ## Known limitations
 

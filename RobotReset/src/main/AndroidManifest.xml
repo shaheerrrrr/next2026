@@ -1,6 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+      Required for DriverStationLauncher (com.next2026.robotreset.launch) to see
+      the FTC Driver Station app at all. Android 11+ (API 30+) package-visibility
+      filtering hides other installed apps from PackageManager queries, including
+      getLaunchIntentForPackage(), for any app targeting API 30+, unless the
+      target package is declared here. Without this, LAUNCH_DS fails safe with
+      "package not found" even though the app is genuinely installed: confirmed by
+      real-hardware testing on Fable's phone (targetSdk 34), where
+      getLaunchIntentForPackage(DriverStationLauncher.DS_PACKAGE) returned null
+      until this element was added. adb shell monkey/pm commands are exempt from
+      this filtering (shell UID), which is why a pre-implementation bench check
+      using those tools did not catch this; an ordinary installed app is not
+      exempt.
+    -->
+    <queries>
+        <package android:name="com.qualcomm.ftcdriverstation" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
@@ -26,6 +44,13 @@
             android:name=".config.ConfigActivity"
             android:exported="false"
             android:label="Config" />
+
+        <activity
+            android:name=".launch.DsLaunchActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service
             android:name=".RobotResetService"

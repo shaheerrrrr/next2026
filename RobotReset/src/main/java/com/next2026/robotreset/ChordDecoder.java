@@ -20,7 +20,7 @@ public final class ChordDecoder {
     private ChordDecoder() {
     }
 
-    public enum Command { NONE, INIT, START, STOP, OPMODE_SLOT }
+    public enum Command { NONE, INIT, START, STOP, OPMODE_SLOT, LAUNCH_DS }
 
     public static final class Decoded {
         public final Command command;
@@ -86,6 +86,8 @@ public final class ChordDecoder {
                 return Decoded.of(Command.START);
             case KeyEvent.KEYCODE_F3:
                 return Decoded.of(Command.STOP);
+            case KeyEvent.KEYCODE_F4:
+                return Decoded.of(Command.LAUNCH_DS);
             case KeyEvent.KEYCODE_F5:
                 return Decoded.opmodeSlot(0);
             case KeyEvent.KEYCODE_F6:
