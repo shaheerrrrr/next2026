@@ -241,18 +241,18 @@ INIT/START/STOP/OPMODE buttons are enabled for Sol accordingly -- see
 
 **OPEN DS works from any DS app state, including asleep/locked -- but the
 asleep/locked case needs a one-time device setting on Samsung phones.**
-Confirmed on real hardware for Fable both when the phone is awake with the DS
-app merely backgrounded/on the wrong screen, and when the phone is fully
-asleep with the keyguard showing (4/4 across two sessions). The
-asleep/locked case only works once `com.next2026.robotreset` has been
+Confirmed on real hardware for both Fable and Flash, both when the phone is
+awake with the DS app merely backgrounded/on the wrong screen, and when the
+phone is fully asleep with the keyguard showing (Fable 4/4 across two
+sessions; Flash confirmed on the first attempt, no troubleshooting needed).
+The asleep/locked case only works once `com.next2026.robotreset` has been
 granted **Unrestricted** battery access (Settings -> Apps -> Robot Reset ->
 Battery -> Unrestricted on the phone itself) -- this can't be set remotely
 or by the app, so add it to the one-time per-phone setup alongside enabling
-the accessibility service. The stock Android Doze allowlist does **not**
-substitute for this; see `robot-reset-app:docs/bring-up.md`'s "Opening the
-DS app itself" section for why. Flash (same hardware/OS as Fable) needs the
-identical setting; Sol (different OEM, no OneUI) is untested for OPEN DS
-entirely.
+the accessibility service. Both Fable and Flash needed and now have this set.
+The stock Android Doze allowlist does **not** substitute for this; see
+`robot-reset-app:docs/bring-up.md`'s "Opening the DS app itself" section for
+why. Sol (different OEM, no OneUI) is still untested for OPEN DS entirely.
 
 Each button is locked out for 800 ms after a click, which is longer than the
 firmware's internal 600 ms cooldown, so a second deliberate click always

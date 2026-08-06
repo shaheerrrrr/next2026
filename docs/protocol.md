@@ -220,25 +220,22 @@ OPEN DS launches the DS app via Android's `Intent`/`PackageManager` machinery
 `com.next2026.robotreset.launch`) rather than clicking an element inside it,
 so it's a different kind of action entirely — and, unlike the other four, it
 works even when the DS app isn't foregrounded at all, including from a
-genuinely sleeping/locked phone. **Confirmed on real hardware for Fable with
-a real chord** (transmitter → Uno → `fable.ino` → USB HID keyboard → phone
-`onKeyEvent`, not a debug-only shortcut) when the DS app is merely
-backgrounded or on the wrong screen, phone awake — reliably brings the DS app
-to the foreground. The asleep/locked-with-keyguard case is also confirmed
-working (4/4 across two sessions, real hardware), though that specific
-round used the debug dispatch seam rather than a real chord; there is no
-reason to expect the trigger mechanism to matter there given the backgrounded
-case is now confirmed with a real chord, but it has not been independently
-re-run that way. **The asleep/locked case requires a one-time manual device
-setting on Samsung phones** — Settings → Apps → Robot Reset → Battery →
-**Unrestricted** — that this app cannot grant itself; without it, that
-specific case silently fails while everything else keeps working. See
+genuinely sleeping/locked phone. **Confirmed on real hardware for Fable and
+Flash with a real chord** (transmitter → Uno → `fable.ino`/`flash.ino` → USB
+HID keyboard → phone `onKeyEvent`, not a debug-only shortcut), both when the
+DS app is merely backgrounded or on the wrong screen (phone awake), and from
+a genuinely asleep/locked state — reliably brings the DS app to the
+foreground in both cases, on both robots. Flash's confirmation needed no
+troubleshooting at all, on the first attempt. **The asleep/locked case
+requires a one-time manual device setting on Samsung phones** — Settings →
+Apps → Robot Reset → Battery → **Unrestricted** — that this app cannot grant
+itself; without it, that specific case silently fails while everything else
+keeps working. Both Fable and Flash needed and now have this setting. See
 `robot-reset-app:docs/bring-up.md`'s "Opening the DS app itself" section for
 the full finding, including why the stock Android Doze allowlist alone does
 *not* substitute for this (Samsung's battery management is a separate,
-stricter layer on top of it). Flash (same hardware/OS as Fable) is expected
-to need the identical setting; Sol (different OEM, no OneUI) is untested and
-may need something else entirely, or nothing.
+stricter layer on top of it). Sol (different OEM, no OneUI) is still
+untested for OPEN DS entirely and may need something else, or nothing.
 
 Earlier bench defaults deliberately mismatched `stop` with the OpMode-select
 chord (`ctrl+alt+f5`) so the raw-chord transport could be verified without a
@@ -305,9 +302,13 @@ Accelerator.
 
 ### Fable Keyboard HID Report
 
-Fable, and only Fable, presents a **second** USB HID interface: a standard
-boot-layout keyboard, no report ID, used exclusively to emit Driver Station
-command chords. Flash and Sol present a single (gamepad) HID interface each.
+Fable presents a **second** USB HID interface: a standard boot-layout keyboard, no
+report ID, used exclusively to emit Driver Station command chords. Flash's
+`flash.ino` presents the identical second interface (a direct mechanical port of
+Fable's), byte-for-byte the same report layout below. Sol is the exception: its
+32u4/AVR HID stack has no equivalent to a second independent interface, so it
+multiplexes the same chord capability onto its single (gamepad) interface via a
+second Report ID instead — see "Sol HID Report" below.
 
 ```cpp
 typedef struct __attribute__((packed)) {
