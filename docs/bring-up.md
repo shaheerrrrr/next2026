@@ -71,7 +71,7 @@ If you are setting this up from scratch, get both sides going in this order:
 | Consuming the chord vs. pass-through toggle | Verified — `consumed=true`/`false` behaves correctly per chord match |
 | Real DS app resource-ids (this team's build) | **Verified** — see Section 7 for the discovered ids and how to redo this for a different DS app build |
 | Full chord → real click on the real Driver Station app, with a live Robot Controller connection | **Verified** — OpMode select, INIT, START, STOP all confirmed working end-to-end |
-| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware** (Fable) — see "Opening the DS app itself" below |
+| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware** (Fable), **with a real `Ctrl+Alt+F4` chord** over the real LoRa link, not just the debug broadcast — see "Opening the DS app itself" below |
 | `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware** (Fable, 4/4) — **requires Samsung's "Unrestricted" battery access to be granted first**, see "Opening the DS app itself" below |
 
 `adb shell input keyevent` (or `keycombination`) cannot substitute for a real keyboard
@@ -480,11 +480,42 @@ app is not. Fixed by adding
 `package not found` again with the DS app genuinely present, check this element
 before suspecting anything else.
 
-**Confirmed on real hardware (Fable, Samsung Galaxy S20 FE, Android 13/API 33):**
-with the DS app backgrounded, on a different app, or on a DS sub-screen, and the
-phone already awake and unlocked, firing `LAUNCH_DS` (via the debug broadcast, real
-chord not yet bench-tested) reliably brings `FtcDriverStationActivity` to the
-foreground every time.
+**Confirmed on real hardware (Fable, Samsung Galaxy S20 FE, Android 13/API 33), with
+a real `Ctrl+Alt+F4` chord over the real LoRa link** (transmitter -> Uno ->
+`fable.ino` -> USB HID keyboard -> phone `onKeyEvent`, not the debug broadcast): with
+the DS app backgrounded, on a different app, or on a DS sub-screen, and the phone
+already awake and unlocked, firing OPEN DS from the dashboard reliably brings
+`FtcDriverStationActivity` to the foreground. Key Monitor showed `cmd=LAUNCH_DS
+consumed=y` and the Status screen's resolution log showed
+`LAUNCH_DS:com.qualcomm.ftcdriverstation clicked=y launched`.
+
+Bring-up note from this session: getting to that confirmation took real hardware
+debugging unrelated to any code in this feature, and the root cause was upstream of
+everything this repo's own docs usually point at first. **The real cause was that no
+gamepad controller was connected (via Bluetooth) to the desktop machine running
+`driver_station_flask.py`.** `run_transmitter()`'s main loop
+(`driver_station_flask.py`, around `if joystick is None or ser is None:`) skips its
+entire frame-building and send logic -- which includes the UI-command chord
+injection block -- whenever no controller is detected, and `continue`s straight back
+to the top of the loop. With no gamepad connected, **no frame of any kind is ever
+sent over serial**, so nothing reaches the Uno, nothing reaches the LoRa link, and
+nothing reaches the Feather, no matter which dashboard button is clicked or what the
+Feather/phone/OTG connection state is. Once a controller was connected, the exact
+same OPEN DS button click worked immediately.
+
+**This is a real, worth-knowing gap in the dashboard's own feedback, not just a
+one-off bench mistake:** `POST /api/ui-command/<key>` returns `{"ok": true, ...}`
+unconditionally -- it only records the pulse in `SharedState`, and does not check
+whether a controller is connected before reporting success. The dashboard's own
+`/api/status` `error` field does say `"No controller detected."` in this state (and
+the gamepad status pill in the UI reflects it too), but nothing about the UI-command
+buttons themselves signals that a click did nothing. **Before spending time on
+phone/OTG/Feather diagnostics for a chord that isn't landing, check the dashboard's
+gamepad indicator first** -- if it shows "Gamepad Down" / no controller, that alone
+explains total silence on the phone side, regardless of how healthy the rest of the
+chain is. A useful control test either way: fire a chord that has worked in a
+previous session (e.g. INIT) through the exact same setup -- if that also produces
+nothing, suspect the transmitter's controller/serial state before the phone.
 
 **Screen wake from a genuinely asleep/locked phone — confirmed working, but needs a
 one-time manual device setting.** With the screen off and the keyguard showing,
