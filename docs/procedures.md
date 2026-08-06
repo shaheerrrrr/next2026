@@ -282,6 +282,26 @@ Do not use Space while typing in a text field or while a modal is handling
 keyboard input. The selector card shows which robot currently receives tele-op
 frames.
 
+On a supported DS4, the controller light bar follows the selected robot's
+accent color. The app enables the SDL Bluetooth output mode needed for this
+automatically. A **Controller light bar unavailable** notice is non-fatal and
+does not affect controller input or LoRa transmission. To disable optional DS4
+output reports for a run, set `SDL_JOYSTICK_HIDAPI_PS4_RUMBLE=0` in the shell
+before launching the app. Power-cycle the controller afterward before using a
+non-SDL application that expects the DS4's basic Bluetooth report mode.
+
+When Sol is selected, **Estimated Flywheel Target** mirrors the target setting
+from the controls that the desktop transmits. D-pad Up and Down change the
+estimate in `100 RPM` steps, and Square/X resets it to Sol's `3000 RPM`
+default. A successful dashboard INIT, START, STOP, or OPMODE chord addressed to
+Sol also resets the estimate because the OpMode is expected to restart at that
+default. Use **Reset estimate** to manually resynchronize the display after a
+restart performed elsewhere.
+
+This counter is not feedback from Sol. The Android Driver Station telemetry is
+the authority for target RPM and measured RPM. The deployed robot code clamps
+at `0 RPM` but currently has no software upper clamp.
+
 ## Fable Navigation Operation
 
 Use this only after Fable tele-op is registered and the Fable navigation link

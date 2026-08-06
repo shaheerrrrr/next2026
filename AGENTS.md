@@ -78,12 +78,12 @@ branch and verify `git status` before making edits.
   telemetry into the high-rate LoRa gamepad frame without an explicit redesign.
 - Fable's navigation I2C address is `0x42` and its ESP-NOW channel is `1`.
 - Antennas must be attached before intentional LoRa transmission.
-- Only Fable presents a second USB HID interface (a keyboard, alongside its
-  gamepad). Flash and Sol present one HID interface each.
+- Fable and Flash present separate gamepad and keyboard HID interfaces. Sol's
+  AVR HID implementation carries gamepad and keyboard reports on one interface.
 - `BTN_UI_CMD` (`0x0800`) frames carry a Driver Station command chord (a HID
-  modifier/key pair) in `lx`, not stick data, and must never be addressed to
-  Flash or Sol: neither has `BTN_UI_CMD` handling, and both would read the
-  chord word as a raw, full-deflection left-stick command.
+  modifier/key pair) in `lx`, not stick data. All three current receiver
+  firmwares handle it, but adding another receiver to the UI-command allowlist
+  is unsafe until that receiver has matching handling and has been reflashed.
 
 ## Coupled Changes
 
@@ -158,6 +158,13 @@ feedback. A UI change must preserve that distinction. Current short-term
 behavior clears the dashboard autonomous state when a meaningful Fable tele-op
 drive or exit command is sent. Do not claim this proves the Control Hub has
 stopped autonomous execution.
+
+Sol's flywheel target indicator is also desktop-side state. It mirrors the
+deployed `Shooter.java` default (`3000 RPM`), step (`100 RPM`), zero clamp,
+D-pad edge handling, and Square/X reset, but receives no Sol telemetry. Keep
+those constants synchronized with the `sol` branch and describe the Android
+Driver Station telemetry as authoritative. Successful Sol command-chord
+requests reset the estimate because the OpMode is expected to restart.
 
 ## Documentation Ownership
 

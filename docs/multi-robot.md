@@ -33,7 +33,20 @@ When SDL and the connected controller support LED output, the DS4 light bar
 also changes to the selected robot's configured accent color. This is a local
 driver aid only: failure or lack of light-bar support does not affect controller
 input, robot selection, packet transmission, or any receiver. The colors come
-from `ROBOT_ACCENTS` near the top of `driver_station_flask.py`.
+from `CONTROLLER_LIGHTBAR_COLORS` near the top of `driver_station_flask.py` and
+are independent from the dashboard palette. All three colors are deliberately
+more saturated for visibility through the DS4 diffuser: Flash is vivid blue,
+Fable is orange-red, and Sol is bright green.
+
+The desktop enables SDL's PS4 enhanced HIDAPI report mode before pygame starts,
+then sends LED updates through the same open SDL joystick object that pygame
+uses for input. This is required for light-bar output on a DS4 connected over
+Bluetooth. LED discovery and every color update are best-effort operations:
+errors appear as dashboard notices and are otherwise ignored. An operator can
+disable enhanced output reports by setting
+`SDL_JOYSTICK_HIDAPI_PS4_RUMBLE=0` before starting the app. After enhanced mode
+has been enabled for a Bluetooth DS4, fully power-cycle the controller before
+using it with a non-SDL DirectInput application that expects basic reports.
 
 Then each compares byte 3 with its compiled `ROBOT_ID`.
 
@@ -150,6 +163,33 @@ The desktop still transmits the shared fields. Sol's firmware ignores controls
 that are not part of its HID profile. This keeps one fleet packet format while
 allowing robot-specific behavior at the HID boundary.
 
+### Sol Flywheel RPM Estimate
+
+When Sol is selected, the dashboard shows an **Estimated Flywheel Target**.
+This is a desktop-side mirror of the deployed `Shooter.java` controls, not RPM
+telemetry from Sol:
+
+- The estimate starts at `3000 RPM`, matching Sol's OpMode default.
+- A rising D-pad Up press adds `100 RPM`.
+- A rising D-pad Down press subtracts `100 RPM`, stopping at `0 RPM`.
+- A rising Square/X press returns the estimate to `3000 RPM`, just as the robot
+  code does.
+- Sending any Driver Station command chord to Sol resets the estimate to
+  `3000 RPM`, because restarting or reinitializing the OpMode recreates the
+  shooter subsystem at its default.
+- **Reset estimate** manually returns only the dashboard counter to the
+  default; it does not send a new gamepad or RPM command to Sol.
+
+The deployed Sol code currently has no software upper clamp. Its shooter
+subsystem comments identify `4500 RPM` as the physical maximum under load, but
+D-pad Up still increases the target above that value. The dashboard mirrors
+the implemented behavior and therefore does not invent an upper limit.
+
+Because the Sol tele-op path is one-way, the estimate can drift if a LoRa frame
+is lost, the OpMode is restarted by some path other than a dashboard chord, or
+the robot code changes without the desktop constants changing. Sol's Android
+Driver Station telemetry remains authoritative for both actual and target RPM.
+
 ## Fable Autonomy While Driving Another Robot
 
 Fable navigation is not a stream of remote motor commands. The driver station
@@ -181,6 +221,7 @@ The dashboard knows:
 - Whether returned ESP-NOW telemetry says a target is valid
 - Whether the desktop has issued a clear
 - Whether meaningful Fable tele-op override input was transmitted
+- Its local estimate of Sol's flywheel target based on addressed button frames
 
 The dashboard does not currently know the authoritative Fable drivetrain mode.
 It does not receive `TELEOP`, `AUTO_NAVIGATING`, or `GOONING` status from the
@@ -196,6 +237,10 @@ that same input to begin gooning rather than ordinary tele-op.
 
 Use the Android Driver Station telemetry as the authority for actual Fable
 drive mode.
+
+It also does not receive Sol flywheel telemetry. The Sol RPM indicator is a
+convenience counter and must not be interpreted as measured wheel speed or
+confirmation that a D-pad packet reached the robot.
 
 ## Logs And Status
 

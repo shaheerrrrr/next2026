@@ -1,14 +1,22 @@
 import argparse
 import ctypes
+import ctypes.util
 import json
 import os
 import queue
 import struct
+import sys
 import threading
 import time
 from collections import deque
 
 from flask import Flask, Response, jsonify, request, stream_with_context
+
+# SDL's PS4 HIDAPI driver exposes Bluetooth output effects (including the DS4
+# light bar) only in enhanced-report mode. setdefault keeps an operator's
+# explicit SDL override authoritative.
+os.environ.setdefault("SDL_JOYSTICK_HIDAPI_PS4_RUMBLE", "1")
+
 import pygame
 import serial
 
@@ -27,6 +35,14 @@ ROBOT_ACCENTS = {
     "flash": "#5692cc",
     "fable": "#c15f3c",
     "sol": "#74aa9c",
+}
+
+# Light-bar colors are intentionally more saturated than the dashboard palette
+# so the robots remain distinct through the DS4's translucent diffuser.
+CONTROLLER_LIGHTBAR_COLORS = {
+    "flash": "#0077ff",
+    "fable": "#f4512a",
+    "sol": "#00ff3c",
 }
 
 ROBOTS = {
@@ -56,6 +72,12 @@ ROBOTS = {
 ROBOT_BY_ID = {robot["id"]: key for key, robot in ROBOTS.items()}
 ROBOT_ORDER = tuple(ROBOTS)
 
+# Mirrors Sol's deployed Shooter.java target controls. This is intentionally a
+# desktop estimate: the LoRa/HID path has no return telemetry from Sol.
+SOL_FLYWHEEL_DEFAULT_RPM = 3000
+SOL_FLYWHEEL_RPM_STEP = 100
+SOL_FLYWHEEL_MIN_RPM = 0
+
 
 class OptionalControllerLightbar:
     """Best-effort SDL controller LED output that can never block driving."""
@@ -63,6 +85,8 @@ class OptionalControllerLightbar:
     def __init__(self):
         self._sdl = None
         self._joystick = None
+        self._owns_joystick = False
+        self.backend = ""
 
     @staticmethod
     def _rgb(hex_color):
@@ -77,37 +101,104 @@ class OptionalControllerLightbar:
         raw = self._sdl.SDL_GetError()
         return raw.decode("utf-8", errors="replace") if raw else "unknown SDL error"
 
-    def connect(self, device_index):
+    @staticmethod
+    def _loaded_sdl_paths():
+        if sys.platform != "darwin":
+            return []
+
+        paths = []
+        process = ctypes.CDLL(None)
+        try:
+            process._dyld_image_count.argtypes = []
+            process._dyld_image_count.restype = ctypes.c_uint32
+            process._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+            process._dyld_get_image_name.restype = ctypes.c_char_p
+            for index in range(process._dyld_image_count()):
+                raw = process._dyld_get_image_name(index)
+                if not raw:
+                    continue
+                path = raw.decode("utf-8", errors="replace")
+                if "libSDL2" in os.path.basename(path):
+                    paths.append(path)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return []
+        return paths
+
+    @classmethod
+    def _load_sdl(cls):
+        candidates = [None, *cls._loaded_sdl_paths()]
+        discovered = ctypes.util.find_library("SDL2")
+        if discovered:
+            candidates.append(discovered)
+        candidates.extend(("libSDL2-2.0.so.0", "libSDL2.so", "SDL2.dll"))
+
+        errors = []
+        seen = set()
+        for candidate in candidates:
+            label = candidate or "current process"
+            if label in seen:
+                continue
+            seen.add(label)
+            try:
+                library = ctypes.CDLL(candidate) if candidate else ctypes.CDLL(None)
+                required = (
+                    "SDL_JoystickFromInstanceID",
+                    "SDL_JoystickOpen",
+                    "SDL_JoystickClose",
+                    "SDL_JoystickHasLED",
+                    "SDL_JoystickSetLED",
+                    "SDL_GetError",
+                )
+                missing = [symbol for symbol in required if not hasattr(library, symbol)]
+                if missing:
+                    errors.append(f"{label}: missing {', '.join(missing)}")
+                    continue
+                return library, label
+            except (OSError, TypeError, ValueError) as exc:
+                errors.append(f"{label}: {exc}")
+        raise OSError("could not load pygame SDL LED API; " + " | ".join(errors))
+
+    @staticmethod
+    def _configure_sdl(sdl):
+        sdl.SDL_JoystickFromInstanceID.argtypes = [ctypes.c_int32]
+        sdl.SDL_JoystickFromInstanceID.restype = ctypes.c_void_p
+        sdl.SDL_JoystickOpen.argtypes = [ctypes.c_int]
+        sdl.SDL_JoystickOpen.restype = ctypes.c_void_p
+        sdl.SDL_JoystickSetLED.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint8,
+            ctypes.c_uint8,
+            ctypes.c_uint8,
+        ]
+        sdl.SDL_JoystickSetLED.restype = ctypes.c_int
+        sdl.SDL_JoystickHasLED.argtypes = [ctypes.c_void_p]
+        sdl.SDL_JoystickHasLED.restype = ctypes.c_int
+        sdl.SDL_JoystickClose.argtypes = [ctypes.c_void_p]
+        sdl.SDL_JoystickClose.restype = None
+        sdl.SDL_GetError.argtypes = []
+        sdl.SDL_GetError.restype = ctypes.c_char_p
+
+    def connect(self, joystick):
         self.close()
         try:
-            # pygame has already loaded SDL into this process. Resolving its
-            # symbols from the process avoids a new dependency or a second SDL
-            # runtime with separate controller state.
-            self._sdl = ctypes.CDLL(None)
-            self._sdl.SDL_JoystickOpen.argtypes = [ctypes.c_int]
-            self._sdl.SDL_JoystickOpen.restype = ctypes.c_void_p
-            self._sdl.SDL_JoystickSetLED.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_uint8,
-                ctypes.c_uint8,
-                ctypes.c_uint8,
-            ]
-            self._sdl.SDL_JoystickSetLED.restype = ctypes.c_int
-            self._sdl.SDL_JoystickHasLED.argtypes = [ctypes.c_void_p]
-            self._sdl.SDL_JoystickHasLED.restype = ctypes.c_int
-            self._sdl.SDL_JoystickClose.argtypes = [ctypes.c_void_p]
-            self._sdl.SDL_JoystickClose.restype = None
-            self._sdl.SDL_GetError.argtypes = []
-            self._sdl.SDL_GetError.restype = ctypes.c_char_p
+            self._sdl, self.backend = self._load_sdl()
+            self._configure_sdl(self._sdl)
 
-            self._joystick = self._sdl.SDL_JoystickOpen(device_index)
+            instance_id = joystick.get_instance_id()
+            self._joystick = self._sdl.SDL_JoystickFromInstanceID(instance_id)
+            if not self._joystick:
+                # Older pygame/SDL combinations may not expose the open object
+                # by instance ID. Opening the same device is a safe fallback;
+                # SDL reference-counts duplicate joystick opens.
+                self._joystick = self._sdl.SDL_JoystickOpen(joystick.get_id())
+                self._owns_joystick = bool(self._joystick)
             if not self._joystick:
                 error = self._sdl_error()
                 self._sdl = None
                 return False, error
             if not self._sdl.SDL_JoystickHasLED(self._joystick):
                 self.close()
-                return False, "controller does not support SDL LED output"
+                return False, "SDL reports no modifiable controller LED"
             return True, ""
         except (AttributeError, OSError, TypeError, ValueError) as exc:
             self.close()
@@ -125,13 +216,15 @@ class OptionalControllerLightbar:
             return False, str(exc)
 
     def close(self):
-        if self._sdl is not None and self._joystick:
+        if self._sdl is not None and self._joystick and self._owns_joystick:
             try:
                 self._sdl.SDL_JoystickClose(self._joystick)
             except (AttributeError, OSError, TypeError, ValueError):
                 pass
         self._joystick = None
+        self._owns_joystick = False
         self._sdl = None
+        self.backend = ""
 
 
 FABLE_NAV_SERIAL_BAUD = 115200
@@ -158,7 +251,7 @@ BTN_DPAD_UP = 1 << 7
 BTN_DPAD_DOWN = 1 << 8
 BTN_DPAD_LEFT = 1 << 9
 BTN_DPAD_RIGHT = 1 << 10
-BTN_UI_CMD = 1 << 11  # 0x0800; docs/protocol.md documents bits 11-15 as unassigned
+BTN_UI_CMD = 1 << 11  # 0x0800; reserved for Driver Station command chords
 
 EVENT_BACKLOG = 500
 LOG_BACKLOG = 240
@@ -754,6 +847,39 @@ INDEX_HTML = r"""<!doctype html>
     .dpad .right { grid-column: 3; grid-row: 2; }
     .dpad .down { grid-column: 2; grid-row: 3; }
 
+    .sol-rpm {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 16px 16px 0;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .sol-rpm-readout {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .sol-rpm-value {
+      color: var(--text);
+      font-size: 30px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+
+    .sol-rpm-unit {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
     .actions {
       display: flex;
       gap: 10px;
@@ -1202,6 +1328,7 @@ INDEX_HTML = r"""<!doctype html>
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .controls-grid { grid-template-columns: 1fr; }
       .button-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .sol-rpm { align-items: flex-start; flex-direction: column; }
       .nav-details { grid-template-columns: 1fr; }
       .field-map { height: 360px; }
       .terminal { height: 440px; }
@@ -1303,6 +1430,16 @@ INDEX_HTML = r"""<!doctype html>
       </section>
 
       <section>
+        <div class="sol-rpm hidden" id="solRpmPanel">
+          <div>
+            <div class="label">Estimated Flywheel Target</div>
+            <div class="sol-rpm-readout">
+              <span class="sol-rpm-value" id="solRpmValue">__SOL_RPM_DEFAULT__</span>
+              <span class="sol-rpm-unit">RPM</span>
+            </div>
+          </div>
+          <button class="action" id="solRpmResetBtn">Reset estimate</button>
+        </div>
         <div class="section-head">
           <h2 id="logTitle">Flash Transmit Log</h2>
           <div class="actions">
@@ -1741,6 +1878,11 @@ INDEX_HTML = r"""<!doctype html>
       el(id).classList.toggle('active', Boolean(active));
     }
 
+    function applySolRpm(payload) {
+      if (!payload || payload.target_rpm === undefined) return;
+      el('solRpmValue').textContent = Number(payload.target_rpm).toFixed(0);
+    }
+
     function applyUiCommands(payload) {
       if (!payload || !payload.commands) return;
       uiCommands = payload.commands;
@@ -1792,6 +1934,7 @@ INDEX_HTML = r"""<!doctype html>
       const fable = robotKey === 'fable';
       el('standardButtons').classList.toggle('hidden', sol);
       el('solControls').classList.toggle('hidden', !sol);
+      el('solRpmPanel').classList.toggle('hidden', !sol);
       el('fableNavPanel').classList.toggle('hidden', !fable);
       el('ltRow').classList.toggle('hidden', sol);
 
@@ -2259,6 +2402,7 @@ INDEX_HTML = r"""<!doctype html>
       }
       if (status.fable_nav) updateFableNav(status.fable_nav);
       if (status.ui_commands) applyUiCommands(status.ui_commands);
+      if (status.sol_rpm) applySolRpm(status.sol_rpm);
       setPill('gamepadPill', status.gamepad_ok ? 'ok' : 'bad', status.gamepad_ok ? 'Gamepad OK' : 'Gamepad Down');
       setPill('serialPill', status.serial_ok ? 'ok' : 'bad', status.serial_ok ? 'Serial OK' : 'Serial Down');
       if (status.error) {
@@ -2290,6 +2434,10 @@ INDEX_HTML = r"""<!doctype html>
       });
       source.addEventListener('ui_commands', e => {
         applyUiCommands(JSON.parse(e.data));
+      });
+      source.addEventListener('sol_rpm', e => {
+        lastEventAt = Date.now();
+        applySolRpm(JSON.parse(e.data));
       });
       source.addEventListener('notice', e => {
         const line = document.createElement('div');
@@ -2323,6 +2471,17 @@ INDEX_HTML = r"""<!doctype html>
         await fetch('/api/driver1', { method: 'POST' });
       } finally {
         setTimeout(() => { el('driver1Btn').disabled = false; }, 900);
+      }
+    });
+
+    el('solRpmResetBtn').addEventListener('click', async () => {
+      el('solRpmResetBtn').disabled = true;
+      try {
+        const response = await fetch('/api/sol/rpm/reset', { method: 'POST' });
+        const payload = await response.json().catch(() => ({}));
+        if (payload.ok && payload.sol_rpm) applySolRpm(payload.sol_rpm);
+      } finally {
+        el('solRpmResetBtn').disabled = false;
       }
     });
 
@@ -2461,6 +2620,7 @@ def apply_robot_accents(html):
         "__ROBOT_ACCENT_FABLE__": ROBOT_ACCENTS["fable"],
         "__ROBOT_ACCENT_SOL__": ROBOT_ACCENTS["sol"],
         "__FABLE_FIELD_METERS__": str(FABLE_NAV_DEFAULT_FIELD_METERS),
+        "__SOL_RPM_DEFAULT__": str(SOL_FLYWHEEL_DEFAULT_RPM),
     }
 
     for token, value in replacements.items():
@@ -2492,6 +2652,11 @@ class SharedState:
         self.ui_commands = build_ui_commands(DEFAULT_UI_COMMANDS)
         self.ui_commands_path = ""
         self.ui_commands_error = ""
+        self.sol_target_rpm = SOL_FLYWHEEL_DEFAULT_RPM
+        self.sol_prev_dpad_up = False
+        self.sol_prev_dpad_down = False
+        self.sol_prev_square = False
+        self.sol_rpm_reason = "startup default"
         self.latest_by_robot = {}
         self.logs = {key: deque(maxlen=LOG_BACKLOG) for key in ROBOTS}
         self.fable_nav_serial = None
@@ -2572,6 +2737,7 @@ class SharedState:
             "version": VERSION,
             "frame_len": FRAME_LEN,
             "fable_nav": dict(self.fable_nav),
+            "sol_rpm": self.sol_rpm_snapshot_unlocked(),
             # Same shape as snapshot_ui_commands() -- {commands, path, error} --
             # so both the SSE "status" event and the "ui_commands" event feed
             # the same applyUiCommands() on the dashboard.
@@ -2582,10 +2748,72 @@ class SharedState:
             },
         }
 
+    def sol_rpm_snapshot_unlocked(self):
+        return {
+            "target_rpm": self.sol_target_rpm,
+            "default_rpm": SOL_FLYWHEEL_DEFAULT_RPM,
+            "step_rpm": SOL_FLYWHEEL_RPM_STEP,
+            "min_rpm": SOL_FLYWHEEL_MIN_RPM,
+            # Shooter.java documents a physical maximum but currently applies
+            # no software upper clamp. Keep the estimate faithful to that code.
+            "max_rpm": None,
+            "reason": self.sol_rpm_reason,
+            "authoritative": False,
+        }
+
+    def reset_sol_rpm_estimate(self, reason):
+        with self.lock:
+            self.sol_target_rpm = SOL_FLYWHEEL_DEFAULT_RPM
+            self.sol_rpm_reason = reason
+            payload = self.sol_rpm_snapshot_unlocked()
+        self.publish("sol_rpm", payload)
+        return payload
+
+    def observe_sol_controls(self, buttons):
+        dpad_up = bool(buttons & BTN_DPAD_UP)
+        dpad_down = bool(buttons & BTN_DPAD_DOWN)
+        square = bool(buttons & BTN_SQUARE)
+
+        with self.lock:
+            previous_rpm = self.sol_target_rpm
+            reason = self.sol_rpm_reason
+
+            # Preserve Shooter.update() ordering for simultaneous edge presses.
+            if dpad_up and not self.sol_prev_dpad_up:
+                self.sol_target_rpm += SOL_FLYWHEEL_RPM_STEP
+                reason = "D-pad up"
+            if dpad_down and not self.sol_prev_dpad_down:
+                self.sol_target_rpm = max(
+                    SOL_FLYWHEEL_MIN_RPM,
+                    self.sol_target_rpm - SOL_FLYWHEEL_RPM_STEP,
+                )
+                reason = "D-pad down"
+            if square and not self.sol_prev_square:
+                self.sol_target_rpm = SOL_FLYWHEEL_DEFAULT_RPM
+                reason = "Square / X reset"
+
+            self.sol_prev_dpad_up = dpad_up
+            self.sol_prev_dpad_down = dpad_down
+            self.sol_prev_square = square
+            changed = self.sol_target_rpm != previous_rpm
+            if changed:
+                self.sol_rpm_reason = reason
+                payload = self.sol_rpm_snapshot_unlocked()
+            else:
+                payload = None
+
+        if payload is not None:
+            self.publish("sol_rpm", payload)
+        return payload
+
     def set_active_robot(self, robot_key):
         with self.lock:
             if robot_key not in ROBOTS:
                 return False
+            if self.active_robot == "sol" and robot_key != "sol":
+                self.sol_prev_dpad_up = False
+                self.sol_prev_dpad_down = False
+                self.sol_prev_square = False
             self.active_robot = robot_key
             snap = self.snapshot_unlocked()
         self.publish("status", snap)
@@ -2594,7 +2822,12 @@ class SharedState:
     def cycle_active_robot(self):
         with self.lock:
             index = ROBOT_ORDER.index(self.active_robot)
-            self.active_robot = ROBOT_ORDER[(index + 1) % len(ROBOT_ORDER)]
+            next_robot = ROBOT_ORDER[(index + 1) % len(ROBOT_ORDER)]
+            if self.active_robot == "sol" and next_robot != "sol":
+                self.sol_prev_dpad_up = False
+                self.sol_prev_dpad_down = False
+                self.sol_prev_square = False
+            self.active_robot = next_robot
             robot_key = self.active_robot
             snap = self.snapshot_unlocked()
         self.publish("status", snap)
@@ -2995,12 +3228,22 @@ def run_transmitter(args, shared):
                             )
                         },
                     )
-                    lightbar_ok, lightbar_error = lightbar.connect(0)
+                    lightbar_ok, lightbar_error = lightbar.connect(joystick)
                     if lightbar_ok:
-                        color_ok, color_error = lightbar.set_color(ROBOTS[selected_robot]["accent"])
+                        color_ok, color_error = lightbar.set_color(
+                            CONTROLLER_LIGHTBAR_COLORS[selected_robot]
+                        )
                         if color_ok:
                             lightbar_robot = selected_robot
-                            shared.publish("notice", {"message": "Controller light bar follows robot selection."})
+                            shared.publish(
+                                "notice",
+                                {
+                                    "message": (
+                                        "Controller light bar follows robot selection "
+                                        f"via {lightbar.backend}."
+                                    )
+                                },
+                            )
                         else:
                             lightbar_robot = selected_robot
                             shared.publish("notice", {"message": f"Controller light bar unavailable: {color_error}"})
@@ -3051,7 +3294,9 @@ def run_transmitter(args, shared):
                 with shared.lock:
                     selected_robot = shared.active_robot
                 if selected_robot != lightbar_robot:
-                    color_ok, color_error = lightbar.set_color(ROBOTS[selected_robot]["accent"])
+                    color_ok, color_error = lightbar.set_color(
+                        CONTROLLER_LIGHTBAR_COLORS[selected_robot]
+                    )
                     lightbar_robot = selected_robot
                     if not color_ok:
                         shared.publish("notice", {"message": f"Controller light bar unavailable: {color_error}"})
@@ -3087,10 +3332,8 @@ def run_transmitter(args, shared):
             ui_command_key, ui_command_word, ui_command_robot = shared.ui_command_active()
             injected_ui_command = ""
             if ui_command_key and ui_command_robot == robot_key:
-                # Guard against a robot switch mid-pulse: without this, a chord
-                # word routed to Flash or Sol would be read as raw stick data
-                # (see flash.ino/sol.ino, which have no BTN_UI_CMD handling)
-                # and clamp to a full-deflection left stick.
+                # Keep an in-flight chord bound to the robot selected when the
+                # button was clicked; switching robots must not redirect it.
                 injected_ui_command = ui_command_key
                 state["buttons"] = BTN_UI_CMD  # assigned, not OR'd: no gamepad state rides along
                 state["lx"] = word_to_i16(ui_command_word)
@@ -3106,6 +3349,12 @@ def run_transmitter(args, shared):
             except (OSError, serial.SerialException) as exc:
                 disconnect_serial(f"Uno serial connection lost: {exc}")
                 continue
+
+            # Update only after the addressed frame reaches the Uno serial
+            # link. Radio delivery remains unacknowledged, so this is still an
+            # estimate rather than authoritative Sol state.
+            if robot_key == "sol":
+                shared.observe_sol_controls(state["buttons"])
 
             payload = make_frame_payload(seq, robot_key, state, shared, injected_driver1, injected_ui_command)
             shared.record_frame(robot_key, payload)
@@ -3280,6 +3529,8 @@ def create_app(shared):
                 "error": "Driver Station command chords are only wired for Fable, Flash, and Sol.",
             }), 409
         shared.pulse_ui_command(command_key, entry["word"], robot_key)
+        if robot_key == "sol":
+            shared.reset_sol_rpm_estimate(f"{entry['label']} command chord")
         shared.publish("notice", {
             "message": (
                 f"Driver Station command {entry['label']} -> {entry['chord']} "
@@ -3292,6 +3543,13 @@ def create_app(shared):
             "chord": entry["chord"],
             "word": entry["word"],
             "robot": robot_key,
+        })
+
+    @app.post("/api/sol/rpm/reset")
+    def reset_sol_rpm():
+        return jsonify({
+            "ok": True,
+            "sol_rpm": shared.reset_sol_rpm_estimate("manual dashboard reset"),
         })
 
     @app.get("/api/ui-commands")
