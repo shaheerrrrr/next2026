@@ -28,6 +28,13 @@ Sol   -> 3
 ```
 
 All Feather receivers validate the same magic, version, length, and checksum.
+
+When SDL and the connected controller support LED output, the DS4 light bar
+also changes to the selected robot's configured accent color. This is a local
+driver aid only: failure or lack of light-bar support does not affect controller
+input, robot selection, packet transmission, or any receiver. The colors come
+from `ROBOT_ACCENTS` near the top of `driver_station_flask.py`.
+
 Then each compares byte 3 with its compiled `ROBOT_ID`.
 
 When a receiver sees a valid frame addressed to another robot, it immediately
@@ -41,12 +48,13 @@ entirely.
 
 ## Selecting A Robot
 
-There are two equivalent methods:
+There are three equivalent methods:
 
 - Click Flash, Fable, or Sol in the top robot selector.
 - Press Space while the dashboard page has normal keyboard focus.
+- Click the DS4 touchpad.
 
-Space cycles in this order:
+Space and the DS4 touchpad cycle in this order:
 
 ```text
 Flash -> Fable -> Sol -> Flash
@@ -207,7 +215,7 @@ per-Feather LoRa acknowledgements; the current tele-op link is one-way.
 ## Safe Switching Procedure
 
 1. Release the sticks, triggers, and buttons.
-2. Select the new robot or press Space.
+2. Select the new robot, press Space, or click the DS4 touchpad.
 3. Verify the selector moved to the intended robot.
 4. Confirm the selected robot's log advances.
 5. Apply a small test input before full motion.

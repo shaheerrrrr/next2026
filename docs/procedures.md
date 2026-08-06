@@ -271,7 +271,8 @@ canonical reference for the current chord table.
 5. Start the correct tele-op OpMode on that robot.
 6. Test at low power before driving at distance.
 
-Press Space while the web page has keyboard focus to cycle:
+Press Space while the web page has keyboard focus, or click the DS4 touchpad,
+to cycle:
 
 ```text
 Flash -> Fable -> Sol -> Flash

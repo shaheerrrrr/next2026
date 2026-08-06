@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import json
 import os
 import queue
@@ -53,6 +54,85 @@ ROBOTS = {
 }
 
 ROBOT_BY_ID = {robot["id"]: key for key, robot in ROBOTS.items()}
+ROBOT_ORDER = tuple(ROBOTS)
+
+
+class OptionalControllerLightbar:
+    """Best-effort SDL controller LED output that can never block driving."""
+
+    def __init__(self):
+        self._sdl = None
+        self._joystick = None
+
+    @staticmethod
+    def _rgb(hex_color):
+        value = hex_color.lstrip("#")
+        if len(value) != 6:
+            raise ValueError("robot accent must use #RRGGBB")
+        return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
+
+    def _sdl_error(self):
+        if self._sdl is None:
+            return "SDL is unavailable"
+        raw = self._sdl.SDL_GetError()
+        return raw.decode("utf-8", errors="replace") if raw else "unknown SDL error"
+
+    def connect(self, device_index):
+        self.close()
+        try:
+            # pygame has already loaded SDL into this process. Resolving its
+            # symbols from the process avoids a new dependency or a second SDL
+            # runtime with separate controller state.
+            self._sdl = ctypes.CDLL(None)
+            self._sdl.SDL_JoystickOpen.argtypes = [ctypes.c_int]
+            self._sdl.SDL_JoystickOpen.restype = ctypes.c_void_p
+            self._sdl.SDL_JoystickSetLED.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint8,
+                ctypes.c_uint8,
+                ctypes.c_uint8,
+            ]
+            self._sdl.SDL_JoystickSetLED.restype = ctypes.c_int
+            self._sdl.SDL_JoystickHasLED.argtypes = [ctypes.c_void_p]
+            self._sdl.SDL_JoystickHasLED.restype = ctypes.c_int
+            self._sdl.SDL_JoystickClose.argtypes = [ctypes.c_void_p]
+            self._sdl.SDL_JoystickClose.restype = None
+            self._sdl.SDL_GetError.argtypes = []
+            self._sdl.SDL_GetError.restype = ctypes.c_char_p
+
+            self._joystick = self._sdl.SDL_JoystickOpen(device_index)
+            if not self._joystick:
+                error = self._sdl_error()
+                self._sdl = None
+                return False, error
+            if not self._sdl.SDL_JoystickHasLED(self._joystick):
+                self.close()
+                return False, "controller does not support SDL LED output"
+            return True, ""
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            self.close()
+            return False, str(exc)
+
+    def set_color(self, hex_color):
+        if self._sdl is None or not self._joystick:
+            return False, "controller light bar is unavailable"
+        try:
+            red, green, blue = self._rgb(hex_color)
+            if self._sdl.SDL_JoystickSetLED(self._joystick, red, green, blue) != 0:
+                return False, self._sdl_error()
+            return True, ""
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            return False, str(exc)
+
+    def close(self):
+        if self._sdl is not None and self._joystick:
+            try:
+                self._sdl.SDL_JoystickClose(self._joystick)
+            except (AttributeError, OSError, TypeError, ValueError):
+                pass
+        self._joystick = None
+        self._sdl = None
+
 
 FABLE_NAV_SERIAL_BAUD = 115200
 FABLE_NAV_DEFAULT_FIELD_METERS = 12.0
@@ -2511,6 +2591,15 @@ class SharedState:
         self.publish("status", snap)
         return True
 
+    def cycle_active_robot(self):
+        with self.lock:
+            index = ROBOT_ORDER.index(self.active_robot)
+            self.active_robot = ROBOT_ORDER[(index + 1) % len(ROBOT_ORDER)]
+            robot_key = self.active_robot
+            snap = self.snapshot_unlocked()
+        self.publish("status", snap)
+        return robot_key
+
     def pulse_driver1(self, seconds=0.7):
         with self.lock:
             self.driver1_until = max(self.driver1_until, time.monotonic() + seconds)
@@ -2787,6 +2876,9 @@ def run_transmitter(args, shared):
     pygame.joystick.init()
 
     joystick = None
+    lightbar = OptionalControllerLightbar()
+    lightbar_robot = None
+    cycle_button_was_down = False
     ser = None
     seq = 0
     period = 1.0 / args.hz
@@ -2821,7 +2913,10 @@ def run_transmitter(args, shared):
         )
 
     def disconnect_gamepad(message):
-        nonlocal joystick, gamepad_error, next_gamepad_attempt
+        nonlocal joystick, gamepad_error, next_gamepad_attempt, lightbar_robot, cycle_button_was_down
+        lightbar.close()
+        lightbar_robot = None
+        cycle_button_was_down = False
         if joystick is not None:
             try:
                 joystick.quit()
@@ -2878,6 +2973,8 @@ def run_transmitter(args, shared):
                     joystick = pygame.joystick.Joystick(0)
                     joystick.init()
                     gamepad_error = ""
+                    with shared.lock:
+                        selected_robot = shared.active_robot
                     shared.publish("notice", {"message": f"Using controller: {joystick.get_name()}"})
                     shared.publish(
                         "notice",
@@ -2898,6 +2995,18 @@ def run_transmitter(args, shared):
                             )
                         },
                     )
+                    lightbar_ok, lightbar_error = lightbar.connect(0)
+                    if lightbar_ok:
+                        color_ok, color_error = lightbar.set_color(ROBOTS[selected_robot]["accent"])
+                        if color_ok:
+                            lightbar_robot = selected_robot
+                            shared.publish("notice", {"message": "Controller light bar follows robot selection."})
+                        else:
+                            lightbar_robot = selected_robot
+                            shared.publish("notice", {"message": f"Controller light bar unavailable: {color_error}"})
+                    else:
+                        lightbar_robot = selected_robot
+                        shared.publish("notice", {"message": f"Controller light bar unavailable: {lightbar_error}"})
                     publish_device_status()
                 except (RuntimeError, pygame.error) as exc:
                     gamepad_error = str(exc)
@@ -2923,6 +3032,29 @@ def run_transmitter(args, shared):
                 if clear_pending:
                     shared.retry_fable_clear()
                     next_fable_clear_attempt = now + FABLE_CLEAR_RETRY_SECONDS
+
+            if joystick is not None:
+                try:
+                    pygame.event.pump()
+                    cycle_button_down = bool(safe_button(joystick, args.robot_cycle_button))
+                except pygame.error as exc:
+                    disconnect_gamepad(f"Controller disconnected: {exc}")
+                    continue
+                if cycle_button_down and not cycle_button_was_down:
+                    selected_robot = shared.cycle_active_robot()
+                    shared.publish(
+                        "notice",
+                        {"message": f"Controller touchpad selected {ROBOTS[selected_robot]['name']}."},
+                    )
+                cycle_button_was_down = cycle_button_down
+
+                with shared.lock:
+                    selected_robot = shared.active_robot
+                if selected_robot != lightbar_robot:
+                    color_ok, color_error = lightbar.set_color(ROBOTS[selected_robot]["accent"])
+                    lightbar_robot = selected_robot
+                    if not color_ok:
+                        shared.publish("notice", {"message": f"Controller light bar unavailable: {color_error}"})
 
             if joystick is None or ser is None:
                 next_send = time.monotonic()
@@ -2986,6 +3118,7 @@ def run_transmitter(args, shared):
             else:
                 next_send = time.monotonic()
     finally:
+        lightbar.close()
         if joystick is not None:
             joystick.quit()
         if ser is not None:
@@ -3264,6 +3397,7 @@ def main():
     parser.add_argument("--dpad-down-button", type=int, default=12, help="fallback pygame button index for D-pad down")
     parser.add_argument("--dpad-left-button", type=int, default=13, help="fallback pygame button index for D-pad left")
     parser.add_argument("--dpad-right-button", type=int, default=14, help="fallback pygame button index for D-pad right")
+    parser.add_argument("--robot-cycle-button", type=int, default=15, help="pygame button index for cycling robots (PS4 touchpad click)")
     parser.add_argument(
         "--ui-commands",
         default=None,
