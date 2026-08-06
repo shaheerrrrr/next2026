@@ -96,13 +96,16 @@ registration mapping for these phones.
 
 Changing the selected robot later does not erase registration.
 
-Driver Station command chords (INIT/START/STOP/OpMode-select, Fable and
-Flash) are a distinct mechanism from controller registration: registration
-injects gamepad button bits so the phone recognizes a USB controller, while a
-command chord emits a separate USB HID **keyboard** event that an on-phone
-AccessibilityService intercepts to click a specific Driver Station UI
-element. See
-[Runtime Procedures](procedures.md#driver-station-command-chords-fable-only).
+Driver Station command chords (INIT/START/STOP/OPEN DS/OpMode-select, all
+three robots) are a distinct mechanism from controller registration:
+registration injects gamepad button bits so the phone recognizes a USB
+controller, while a command chord emits a separate USB HID **keyboard**
+event that an on-phone AccessibilityService intercepts to click a specific
+Driver Station UI element (or, for OPEN DS, to launch the Driver Station app
+itself rather than clicking inside it — see
+[Runtime Procedures](procedures.md#driver-station-command-chords) for OPEN
+DS's current, more limited verification status). See
+[Runtime Procedures](procedures.md#driver-station-command-chords).
 
 ## Control Profiles
 
@@ -120,7 +123,7 @@ Their Feather M0 firmware and custom HID descriptors are functionally
 equivalent for the gamepad interface, except for compiled robot ID and name.
 Fable's and Flash's Feathers both also present a second USB HID interface (a
 boot-layout keyboard) that emits Driver Station command chords (INIT/START/
-STOP/OpMode-select) when `BTN_UI_CMD` is set — `flash.ino` gained this after
+STOP/OPEN DS/OpMode-select) when `BTN_UI_CMD` is set — `flash.ino` gained this after
 `fable.ino`, as a direct mechanical port of the same feature, and it has
 since been reflashed onto a physical Flash Feather and is fully verified
 end-to-end on real hardware, same as Fable: OpMode-select, INIT, START, and

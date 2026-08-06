@@ -261,22 +261,26 @@ LOG_BACKLOG = 240
 # word `(modifier_byte << 8) | hid_usage_id` instead of stick data. The Feather
 # is a dumb chord emitter, so the chord table lives here (and in ui_commands.json)
 # rather than in firmware, and changing a chord needs no reflash.
-UI_COMMAND_KEYS = ("init", "start", "stop", "opmode")
+UI_COMMAND_KEYS = ("init", "start", "stop", "opmode", "open")
 UI_COMMAND_CONFIG_FILENAME = "ui_commands.json"
 UI_COMMAND_CONFIG_VERSION = 1
 UI_COMMAND_PULSE_SECONDS = 0.30  # 6 frames at 20 Hz; see run_transmitter for the
                                   # full redundancy/idempotence contract.
 
 # Real chord defaults, confirmed against the RobotReset phone build on real
-# hardware: ctrl+alt+f1/f2/f3 -> phone clicks INIT/START/STOP, ctrl+alt+f5 ->
-# phone opens the TeleOp OpMode list and selects slot 0 (configured on the
-# phone as "Fable"). All four are editable from the dashboard "Chords..."
-# panel.
+# hardware: ctrl+alt+f1/f2/f3 -> phone clicks INIT/START/STOP, ctrl+alt+f4 ->
+# phone (re)launches the Driver Station app itself (RobotReset's LAUNCH_DS;
+# confirmed on real hardware for an awake, backgrounded/wrong-screen phone --
+# NOT yet confirmed to wake a genuinely sleeping/locked phone, see
+# robot-reset-app:docs/bring-up.md), ctrl+alt+f5 -> phone opens the TeleOp
+# OpMode list and selects slot 0 (configured on the phone as "Fable"). All
+# five are editable from the dashboard "Chords..." panel.
 DEFAULT_UI_COMMANDS = {
     "init": {"label": "INIT", "chord": "ctrl+alt+f1"},
     "start": {"label": "START", "chord": "ctrl+alt+f2"},
     "stop": {"label": "STOP", "chord": "ctrl+alt+f3"},
     "opmode": {"label": "OPMODE", "chord": "ctrl+alt+f5"},
+    "open": {"label": "OPEN DS", "chord": "ctrl+alt+f4"},
 }
 
 # HID Keyboard/Keypad page (0x07) modifier bits, matching hid_keyboard_report_t.modifier.
@@ -1363,10 +1367,11 @@ INDEX_HTML = r"""<!doctype html>
           <h2 id="liveTitle">Flash Live Control</h2>
           <div class="actions">
             <button class="action primary" id="driver1Btn">Register Driver 1</button>
+            <button class="action command" data-ui-command="open" id="uiCmdOpenBtn">OPEN DS</button>
+            <button class="action command" data-ui-command="opmode" id="uiCmdOpmodeBtn">OPMODE</button>
             <button class="action command" data-ui-command="init" id="uiCmdInitBtn">INIT</button>
             <button class="action command" data-ui-command="start" id="uiCmdStartBtn">START</button>
             <button class="action command" data-ui-command="stop" id="uiCmdStopBtn">STOP</button>
-            <button class="action command" data-ui-command="opmode" id="uiCmdOpmodeBtn">OPMODE</button>
             <button class="action" id="uiCmdSettingsBtn">Chords...</button>
           </div>
         </div>
@@ -1560,7 +1565,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="modal-head">
         <div>
           <h2>Driver Station Command Chords</h2>
-          <div class="label">Each button makes Fable's Feather emit one USB keyboard chord into the Driver Station phone. Use names like ctrl+alt+f1, f5, or shift+enter.</div>
+          <div class="label">Each button makes the selected robot's Feather emit one USB keyboard chord into its Driver Station phone. Use names like ctrl+alt+f1, f5, or shift+enter.</div>
         </div>
         <button class="action" id="uiCmdCloseBtn">Close</button>
       </div>
@@ -1585,6 +1590,11 @@ INDEX_HTML = r"""<!doctype html>
             <div class="chord-name">OPMODE</div>
             <div class="field-input"><label>Chord</label><input id="uiCmdOpmodeChord" placeholder="ctrl+alt+f5"></div>
             <div class="chord-encoded" id="uiCmdOpmodeWord">--</div>
+          </div>
+          <div class="chord-row">
+            <div class="chord-name">OPEN DS</div>
+            <div class="field-input"><label>Chord</label><input id="uiCmdOpenChord" placeholder="ctrl+alt+f4"></div>
+            <div class="chord-encoded" id="uiCmdOpenWord">--</div>
           </div>
         </div>
         <div class="chord-error hidden" id="uiCmdError"></div>
@@ -1611,7 +1621,7 @@ INDEX_HTML = r"""<!doctype html>
     const logs = { flash: [], fable: [], sol: [] };
     const latestByRobot = {};
     const el = id => document.getElementById(id);
-    const UI_COMMAND_KEYS = ['init', 'start', 'stop', 'opmode'];
+    const UI_COMMAND_KEYS = ['init', 'start', 'stop', 'opmode', 'open'];
     let uiCommands = null;
 
     function uiCmdId(prefix, key) {
@@ -1621,6 +1631,11 @@ INDEX_HTML = r"""<!doctype html>
       return `0x${Number(word).toString(16).toUpperCase().padStart(4, '0')}`;
     }
     const FABLE_FIELD_METERS = __FABLE_FIELD_METERS__;
+    // {command: {label, chord}} for every UI_COMMAND_KEYS entry, embedded at
+    // page-render time from the same DEFAULT_UI_COMMANDS the server itself
+    // falls back to -- see restoreUiCommandDefaults() below, which reads
+    // this instead of hardcoding chord strings a second time.
+    const UI_COMMAND_DEFAULTS = __UI_COMMAND_DEFAULTS__;
     const FABLE_TILE_LAYERS = {
       street: {
         url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -2247,9 +2262,17 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     function restoreUiCommandDefaults() {
-      el('uiCmdInitChord').value = 'ctrl+alt+f1';
-      el('uiCmdStartChord').value = 'f1';
-      el('uiCmdStopChord').value = 'ctrl+alt+f5';
+      // Derived from UI_COMMAND_DEFAULTS (embedded server-side from the same
+      // DEFAULT_UI_COMMANDS the backend itself falls back to) rather than
+      // hardcoded here a second time -- this previously drifted from the
+      // real defaults (stale bench values, and missing 'opmode' entirely)
+      // and would have silently done the same to 'open' once it existed.
+      for (const key of UI_COMMAND_KEYS) {
+        const defaults = UI_COMMAND_DEFAULTS[key];
+        if (!defaults) continue;
+        const field = el(uiCmdId('uiCmd', key) + 'Chord');
+        if (field) field.value = defaults.chord;
+      }
     }
 
     function currentCalibrationInputs() {
@@ -2621,6 +2644,10 @@ def apply_robot_accents(html):
         "__ROBOT_ACCENT_SOL__": ROBOT_ACCENTS["sol"],
         "__FABLE_FIELD_METERS__": str(FABLE_NAV_DEFAULT_FIELD_METERS),
         "__SOL_RPM_DEFAULT__": str(SOL_FLYWHEEL_DEFAULT_RPM),
+        "__UI_COMMAND_DEFAULTS__": json.dumps({
+            key: {"label": entry["label"], "chord": entry["chord"]}
+            for key, entry in DEFAULT_UI_COMMANDS.items()
+        }),
     }
 
     for token, value in replacements.items():

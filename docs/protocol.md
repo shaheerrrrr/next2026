@@ -139,8 +139,9 @@ Driver Station registration combination.
 
 ### Driver Station Command Injection
 
-Clicking **INIT**, **START**, **STOP**, or **OPMODE** on the dashboard sends
-a Driver Station command chord. This is deliberately **not** a command enum:
+Clicking **INIT**, **START**, **STOP**, **OPMODE**, or **OPEN DS** on the
+dashboard sends a Driver Station command chord. This is deliberately **not**
+a command enum:
 the receiving Feather is a dumb chord emitter, so the chord table lives
 entirely on the desktop (`ui_commands.json`, editable from the dashboard's
 "Chords..." panel) rather than in firmware, and changing a chord needs no
@@ -204,14 +205,40 @@ live Robot Controller connection):
 | INIT | `ctrl+alt+f1` | `0x053A` | Clicks INIT (only once an OpMode is selected) |
 | START | `ctrl+alt+f2` | `0x053B` | Clicks START |
 | STOP | `ctrl+alt+f3` | `0x053C` | Clicks STOP |
+| OPEN DS | `ctrl+alt+f4` | `0x053D` | (Re)launches the Driver Station app itself, regardless of what's currently on screen |
 | OPMODE | `ctrl+alt+f5` | `0x053E` | Opens the OpMode list and selects slot 0 |
 
-All four are operator-editable from the dashboard's "Chords..." panel and
+All five are operator-editable from the dashboard's "Chords..." panel and
 persisted to `ui_commands.json`. `OPMODE` exists as its own command because
 OpMode selection isn't one of the phone app's three named actions (INIT/
 START/STOP) — it's driven by a separate chord table on the phone
 (`Ctrl+Alt+F5`..`F8` select OpMode slots 0..3), and needs its own dashboard
 control rather than sharing one of the other three.
+
+OPEN DS launches the DS app via Android's `Intent`/`PackageManager` machinery
+(`RobotReset`'s `DriverStationLauncher`/`DsLaunchActivity`,
+`com.next2026.robotreset.launch`) rather than clicking an element inside it,
+so it's a different kind of action entirely — and, unlike the other four, it
+works even when the DS app isn't foregrounded at all, including from a
+genuinely sleeping/locked phone. **Confirmed on real hardware for Fable with
+a real chord** (transmitter → Uno → `fable.ino` → USB HID keyboard → phone
+`onKeyEvent`, not a debug-only shortcut) when the DS app is merely
+backgrounded or on the wrong screen, phone awake — reliably brings the DS app
+to the foreground. The asleep/locked-with-keyguard case is also confirmed
+working (4/4 across two sessions, real hardware), though that specific
+round used the debug dispatch seam rather than a real chord; there is no
+reason to expect the trigger mechanism to matter there given the backgrounded
+case is now confirmed with a real chord, but it has not been independently
+re-run that way. **The asleep/locked case requires a one-time manual device
+setting on Samsung phones** — Settings → Apps → Robot Reset → Battery →
+**Unrestricted** — that this app cannot grant itself; without it, that
+specific case silently fails while everything else keeps working. See
+`robot-reset-app:docs/bring-up.md`'s "Opening the DS app itself" section for
+the full finding, including why the stock Android Doze allowlist alone does
+*not* substitute for this (Samsung's battery management is a separate,
+stricter layer on top of it). Flash (same hardware/OS as Fable) is expected
+to need the identical setting; Sol (different OEM, no OneUI) is untested and
+may need something else entirely, or nothing.
 
 Earlier bench defaults deliberately mismatched `stop` with the OpMode-select
 chord (`ctrl+alt+f5`) so the raw-chord transport could be verified without a
@@ -601,7 +628,7 @@ robots unless the web host is deliberately changed.
 | `GET` | `/api/status` | Current driver-station snapshot |
 | `POST` | `/api/robot/<flash|fable|sol>` | Change active tele-op target |
 | `POST` | `/api/driver1` | Start the registration pulse |
-| `POST` | `/api/ui-command/<init\|start\|stop>` | Start a Driver Station command chord pulse; `409` if the active robot is not Fable |
+| `POST` | `/api/ui-command/<init\|start\|stop\|opmode\|open>` | Start a Driver Station command chord pulse; `409` if the active robot is not Fable, Flash, or Sol |
 | `GET` | `/api/ui-commands` | Current chord config, resolved encodings, config file path, and any load error |
 | `POST` | `/api/ui-commands` | Replace and persist the chord config; `400` on an invalid chord |
 | `POST` | `/api/fable/target` | Accept JSON `{lat, lon}` and send an E7 target |

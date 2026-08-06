@@ -227,14 +227,32 @@ INIT/START/STOP/OPMODE buttons are enabled for Sol accordingly -- see
 
 1. Select Fable, Flash, or Sol in the dashboard.
 2. Confirm its phone is showing the FTC Driver Station app and that
-   `RobotReset`'s accessibility service is enabled on that phone.
-3. If starting cold (no OpMode selected yet), click **OPMODE** first -- this
+   `RobotReset`'s accessibility service is enabled on that phone. If the
+   phone has drifted off the DS app, isn't visible at all, or is asleep/
+   locked, click **OPEN DS** first -- see the note below for a one-time
+   per-phone device setting this needs on Samsung hardware.
+3. If starting cold (no OpMode selected yet), click **OPMODE** next -- this
    opens the OpMode list and selects whatever is configured on the phone's
    Config screen as slot 0. INIT stays disabled on the phone until this has
    happened, same as operating the DS app by hand.
 4. Click **INIT**, then **START**, then **STOP** as needed.
 5. Watch the transmit log for `uicmd=<command>:0x####` lines confirming the
    frame went out, and watch the phone for the expected action.
+
+**OPEN DS works from any DS app state, including asleep/locked -- but the
+asleep/locked case needs a one-time device setting on Samsung phones.**
+Confirmed on real hardware for Fable both when the phone is awake with the DS
+app merely backgrounded/on the wrong screen, and when the phone is fully
+asleep with the keyguard showing (4/4 across two sessions). The
+asleep/locked case only works once `com.next2026.robotreset` has been
+granted **Unrestricted** battery access (Settings -> Apps -> Robot Reset ->
+Battery -> Unrestricted on the phone itself) -- this can't be set remotely
+or by the app, so add it to the one-time per-phone setup alongside enabling
+the accessibility service. The stock Android Doze allowlist does **not**
+substitute for this; see `robot-reset-app:docs/bring-up.md`'s "Opening the
+DS app itself" section for why. Flash (same hardware/OS as Fable) needs the
+identical setting; Sol (different OEM, no OneUI) is untested for OPEN DS
+entirely.
 
 Each button is locked out for 800 ms after a click, which is longer than the
 firmware's internal 600 ms cooldown, so a second deliberate click always
@@ -245,22 +263,25 @@ produces a second chord.
 Click **Chords...** next to Register Driver 1 to open the chord editor.
 Each entry accepts a `+`-joined chord name such as `ctrl+alt+f1`, `f5`, or
 `shift+enter`; the modal echoes the resolved hex word as you type. **Restore
-Defaults** resets the four input fields without saving; click **Save
-Chords** to persist. Chords are stored in `ui_commands.json` beside
-`driver_station_flask.py` (or the path passed to `--ui-commands`) and survive
-a restart. If that file is missing or partially invalid, the affected
+Defaults** resets the five input fields without saving (derived from the same
+defaults the server itself falls back to, so this can't drift from them);
+click **Save Chords** to persist. Chords are stored in `ui_commands.json`
+beside `driver_station_flask.py` (or the path passed to `--ui-commands`) and
+survive a restart. If that file is missing or partially invalid, the affected
 command falls back to its default and the modal shows the resulting error
 text -- a bad config file never prevents driving.
 
 The shipped defaults (`ctrl+alt+f1` / `ctrl+alt+f2` / `ctrl+alt+f3` /
-`ctrl+alt+f5`) are the real, confirmed-working chords for the current
-`RobotReset` phone build -- INIT/START/STOP/OPMODE respectively. (Earlier
-bench defaults deliberately mismatched `stop` with the OpMode-select chord so
-the raw transport could be verified without a dedicated fourth button; that
-bootstrapping step is done and the defaults now reflect real usage.) If the
-phone-side app's chord table ever changes, re-point these to match --
-`docs/protocol.md`'s "Driver Station Command Injection" section is the
-canonical reference for the current chord table.
+`ctrl+alt+f4` / `ctrl+alt+f5`) are INIT/START/STOP/OPEN DS/OPMODE
+respectively. (Earlier bench defaults deliberately mismatched `stop` with the
+OpMode-select chord so the raw transport could be verified without a
+dedicated fourth button; that bootstrapping step is done and the defaults now
+reflect real usage.) All five are real, confirmed-working chords for the
+current `RobotReset` phone build; OPEN DS additionally needs the one-time
+Samsung battery-access setting noted above for its asleep/locked case. If the
+phone-side app's chord table ever changes,
+re-point these to match -- `docs/protocol.md`'s "Driver Station Command
+Injection" section is the canonical reference for the current chord table.
 
 ## Tele-Op Operation
 
