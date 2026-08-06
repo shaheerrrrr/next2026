@@ -71,8 +71,8 @@ If you are setting this up from scratch, get both sides going in this order:
 | Consuming the chord vs. pass-through toggle | Verified — `consumed=true`/`false` behaves correctly per chord match |
 | Real DS app resource-ids (this team's build) | **Verified** — see Section 7 for the discovered ids and how to redo this for a different DS app build |
 | Full chord → real click on the real Driver Station app, with a live Robot Controller connection | **Verified** — OpMode select, INIT, START, STOP all confirmed working end-to-end |
-| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware** (Fable), **with a real `Ctrl+Alt+F4` chord** over the real LoRa link, not just the debug broadcast — see "Opening the DS app itself" below |
-| `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware** (Fable, 4/4) — **requires Samsung's "Unrestricted" battery access to be granted first**, see "Opening the DS app itself" below |
+| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware, Fable and Flash**, **with a real `Ctrl+Alt+F4` chord** over the real LoRa link, not just the debug broadcast — see "Opening the DS app itself" below |
+| `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware, Fable and Flash** (Fable 4/4, Flash confirmed first attempt) — **requires Samsung's "Unrestricted" battery access to be granted first**, see "Opening the DS app itself" below |
 
 `adb shell input keyevent` (or `keycombination`) cannot substitute for a real keyboard
 here: it injects via `InputManager`, which never reaches the accessibility
@@ -480,14 +480,18 @@ app is not. Fixed by adding
 `package not found` again with the DS app genuinely present, check this element
 before suspecting anything else.
 
-**Confirmed on real hardware (Fable, Samsung Galaxy S20 FE, Android 13/API 33), with
-a real `Ctrl+Alt+F4` chord over the real LoRa link** (transmitter -> Uno ->
-`fable.ino` -> USB HID keyboard -> phone `onKeyEvent`, not the debug broadcast): with
-the DS app backgrounded, on a different app, or on a DS sub-screen, and the phone
-already awake and unlocked, firing OPEN DS from the dashboard reliably brings
-`FtcDriverStationActivity` to the foreground. Key Monitor showed `cmd=LAUNCH_DS
-consumed=y` and the Status screen's resolution log showed
-`LAUNCH_DS:com.qualcomm.ftcdriverstation clicked=y launched`.
+**Confirmed on real hardware for both Fable and Flash (both Samsung Galaxy S20 FE
+variants, Android 13/API 33), with a real `Ctrl+Alt+F4` chord over the real LoRa
+link** (transmitter -> Uno -> `fable.ino`/`flash.ino` -> USB HID keyboard -> phone
+`onKeyEvent`, not the debug broadcast): with the DS app backgrounded, on a different
+app, or on a DS sub-screen, and the phone already awake and unlocked, firing OPEN DS
+from the dashboard reliably brings `FtcDriverStationActivity` to the foreground.
+Fable's session recorded Key Monitor showing `cmd=LAUNCH_DS consumed=y` and the
+Status screen's resolution log showing
+`LAUNCH_DS:com.qualcomm.ftcdriverstation clicked=y launched`; Flash's session was
+confirmed by direct observation of the DS app opening on screen. Both worked on the
+first attempt for Flash, with no repeat of Fable's earlier troubleshooting -- see the
+gamepad-connection note below for why that mattered.
 
 Bring-up note from this session: getting to that confirmation took real hardware
 debugging unrelated to any code in this feature, and the root cause was upstream of
@@ -517,11 +521,12 @@ chain is. A useful control test either way: fire a chord that has worked in a
 previous session (e.g. INIT) through the exact same setup -- if that also produces
 nothing, suspect the transmitter's controller/serial state before the phone.
 
-**Screen wake from a genuinely asleep/locked phone — confirmed working, but needs a
-one-time manual device setting.** With the screen off and the keyguard showing,
-`LAUNCH_DS` reliably wakes the screen, dismisses the keyguard, and brings the DS app
-to the foreground (4/4 across two separate sessions, with adequate settle time
-between test cycles — see below) **once RobotReset is granted Samsung's
+**Screen wake from a genuinely asleep/locked phone — confirmed working on both Fable
+and Flash, but needs a one-time manual device setting.** With the screen off and the
+keyguard showing, `LAUNCH_DS` reliably wakes the screen, dismisses the keyguard, and
+brings the DS app to the foreground (4/4 on Fable across two separate sessions, with
+adequate settle time between test cycles — see below; confirmed again on Flash by
+direct observation, first attempt) **once RobotReset is granted Samsung's
 "Unrestricted" battery access**: Settings → Apps → Robot Reset → Battery →
 **Unrestricted**. This is **not** the same as Samsung's usual "sleeping apps" list
 (which didn't exist as an option on this phone) or the stock Android Doze allowlist
@@ -548,12 +553,20 @@ success and 2 failures out of 3, but the *identical* sequence with a few extra
 seconds of settle time after each transition produced 4/4 successes across two
 sessions — treat a failure under rapid/back-to-back testing as inconclusive, not as
 evidence the fix doesn't work, and prefer a few seconds of slack in the field too.
-Flash (same hardware/OS as Fable, same OneUI) is expected to need the identical
-setting; Sol (different OEM, Android 8.0/API 26, no OneUI, and exercises the
-deprecated pre-27 window-flag branch instead of `setShowWhenLocked`/`setTurnScreenOn`)
-is untested and may need an OEM-equivalent setting, a different fix entirely, or
-nothing at all — don't assume either way until it's actually been through this same
-bench check.
+Flash (same hardware/OS as Fable, same OneUI) needed the identical setting and is now
+**confirmed** the same way, first attempt, no further troubleshooting required. Sol
+(different OEM, Android 8.0/API 26, no OneUI, and exercises the deprecated pre-27
+window-flag branch instead of `setShowWhenLocked`/`setTurnScreenOn`) is still untested
+and may need an OEM-equivalent setting, a different fix entirely, or nothing at all —
+don't assume either way until it's actually been through this same bench check.
+
+**Flash bring-up note:** unlike Fable's session, Flash's real-hardware confirmation
+required no troubleshooting at all -- both the awake/backgrounded and asleep/locked
+cases worked on the first attempt. The only difference in process was checking
+`/api/status`'s `serial_ok`/`gamepad_ok` fields *before* firing anything, rather than
+discovering a disconnected gamepad partway through a debugging session (see the
+gamepad-connection note above). That single check upfront eliminated the entire class
+of failure that consumed most of Fable's session.
 
 ## 9. Pre-session check, every session afterward
 
