@@ -71,8 +71,8 @@ If you are setting this up from scratch, get both sides going in this order:
 | Consuming the chord vs. pass-through toggle | Verified — `consumed=true`/`false` behaves correctly per chord match |
 | Real DS app resource-ids (this team's build) | **Verified** — see Section 7 for the discovered ids and how to redo this for a different DS app build |
 | Full chord → real click on the real Driver Station app, with a live Robot Controller connection | **Verified** — OpMode select, INIT, START, STOP all confirmed working end-to-end |
-| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware, Fable and Flash**, **with a real `Ctrl+Alt+F4` chord** over the real LoRa link, not just the debug broadcast — see "Opening the DS app itself" below |
-| `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware, Fable and Flash** (Fable 4/4, Flash confirmed first attempt) — **requires Samsung's "Unrestricted" battery access to be granted first**, see "Opening the DS app itself" below |
+| `LAUNCH_DS` brings the DS app to the foreground from a backgrounded/wrong-screen state, phone awake | **Verified on real hardware, all three robots (Fable, Flash, Sol)**, **with a real `Ctrl+Alt+F4` chord** over the real LoRa link, not just the debug broadcast — see "Opening the DS app itself" below. Sol has its own multi-second delay quirk, not seen on Fable/Flash. |
+| `LAUNCH_DS` wakes the screen / dismisses the keyguard on a genuinely sleeping, locked phone | **Verified on real hardware, Fable and Flash** (Fable 4/4, Flash confirmed first attempt) — **requires Samsung's "Unrestricted" battery access to be granted first**. **Confirmed NOT working on Sol** (no OneUI, no equivalent setting found yet) — open problem, see "Opening the DS app itself" below |
 
 `adb shell input keyevent` (or `keycombination`) cannot substitute for a real keyboard
 here: it injects via `InputManager`, which never reaches the accessibility
@@ -493,6 +493,12 @@ confirmed by direct observation of the DS app opening on screen. Both worked on 
 first attempt for Flash, with no repeat of Fable's earlier troubleshooting -- see the
 gamepad-connection note below for why that mattered.
 
+**Sol (Moto E5 Cruise, Android 8.0/API 26, `sol.ino`'s Report-ID-multiplexed HID
+transport) is also confirmed for this same awake/backgrounded case, with a real
+chord** -- direct observation of the DS app opening, same as Flash. Sol has its own
+delay quirk (see the dedicated subsection below) and its asleep/locked case does not
+currently work at all, unlike Fable and Flash.
+
 Bring-up note from this session: getting to that confirmation took real hardware
 debugging unrelated to any code in this feature, and the root cause was upstream of
 everything this repo's own docs usually point at first. **The real cause was that no
@@ -554,11 +560,52 @@ seconds of settle time after each transition produced 4/4 successes across two
 sessions — treat a failure under rapid/back-to-back testing as inconclusive, not as
 evidence the fix doesn't work, and prefer a few seconds of slack in the field too.
 Flash (same hardware/OS as Fable, same OneUI) needed the identical setting and is now
-**confirmed** the same way, first attempt, no further troubleshooting required. Sol
-(different OEM, Android 8.0/API 26, no OneUI, and exercises the deprecated pre-27
-window-flag branch instead of `setShowWhenLocked`/`setTurnScreenOn`) is still untested
-and may need an OEM-equivalent setting, a different fix entirely, or nothing at all —
-don't assume either way until it's actually been through this same bench check.
+**confirmed** the same way, first attempt, no further troubleshooting required.
+
+**Sol (Moto E5 Cruise, Android 8.0/API 26, no OneUI): the asleep/locked case does
+not currently work, and remains an open problem.** Confirmed on real hardware: with
+the screen off and settled, firing OPEN DS produced no wake, no keyguard dismiss,
+and no DS app launch at all, across a patient 10-second observation window (`mWakefulness`
+stayed `Dozing` the entire time). Motorola has no OneUI, so Samsung's "Unrestricted"
+battery access setting has no direct equivalent here; a different device setting was
+tried on this phone during bring-up and did not resolve either this or the unrelated
+activity-start delay documented below. This is being treated as a known limitation
+for now, not actively worked around -- if this matters operationally, the
+full-screen-intent-notification approach outlined below (drafted, then deliberately
+not kept, for a different Sol problem) is the most likely path, but would need its
+own investigation specifically for the wake/keyguard case, which is a separate
+mechanism from the activity-start issue it was drafted for.
+
+### Sol-specific: activity starts are sometimes deferred by a few seconds
+
+Real-hardware testing on Sol surfaced a finding neither Fable nor Flash exhibit:
+firing `LAUNCH_DS` while the DS app is backgrounded and the phone is **awake**
+reliably works, but sometimes only after a delay of roughly 2-4 seconds, not the
+near-instant response seen on the other two phones. `logcat` shows `ActivityManager:
+Activity start request from <uid> stopped` (confirmed via `dumpsys package
+com.next2026.robotreset | grep userId=` to be genuinely RobotReset's own UID, not an
+unrelated system message) at the moment of the original attempt, followed by the
+activity actually appearing a few seconds later with a **new** `ActivityRecord`
+identity -- consistent with the platform deferring/retrying the start rather than
+permanently denying it. This is not the Android 10+ background-activity-launch
+restriction (Sol's API level, 26, predates that mechanism); it is most likely a
+Motorola-specific policy, though this is not confirmed. A device setting change on
+Sol's phone during this session did not resolve it.
+
+A full-screen-intent notification (the platform-sanctioned mechanism for bringing an
+Activity to the foreground from a background trigger, used by call/alarm apps) was
+drafted as a fix and does work as a technique in general, but was deliberately **not
+kept**: given the delay is bounded (observed consistently in the 2-4 second range,
+never open-ended) and `LAUNCH_DS` is a recovery/setup action rather than a
+time-critical control input, the added complexity -- a new file, a new
+`POST_NOTIFICATIONS`-gated code path relevant only on API 33+ (Fable/Flash, where it
+isn't needed since the direct path already works there), and its own testing burden
+-- was judged not worth it for a delay this small. If Sol's delay is ever observed to
+be substantially longer or unbounded in the field, revisit this decision; the
+approach (fire a full-screen-intent notification targeting `DsLaunchActivity`
+alongside the existing direct `startActivity()` call, unconditionally on all three
+phones since this app has no concept of which robot it's installed on) is still the
+right one, it was simply not needed yet.
 
 **Flash bring-up note:** unlike Fable's session, Flash's real-hardware confirmation
 required no troubleshooting at all -- both the awake/backgrounded and asleep/locked
